@@ -1,13 +1,59 @@
 from flask import Flask, jsonify, request
+from flask_cors import CORS  # 프론트에서 호출하려면 필요
 
 # Flask객체생성 이걸 보고 어디서 실행되는지 판단
 app = Flask(__name__)
+CORS(app) # CORS 허용 (React와 Flask가 다른 포트일 때)
 
 # 기본 라우팅 페이지
 @app.route('/')
 def home():
     return jsonify({"message": "Hello world"})
 
+
+@app.route('/search', methods=['POST'])
+def search():
+    data = request.get_json()      # axios.post()로 보낸 json 데이터를 파싱
+    query = data.get('query', '')  # 딕셔너리처럼 접근 가능
+
+    print("받은 쿼리: ", query)
+
+    # 여기에 검색 로직 또는 DB 처리 넣기
+    result = [{
+      "id": "패널001",
+      "age": 35,
+      "gender": "남성",
+      "occupation": "개발자",
+      "residence": "서울",
+      "income": 5000,
+      "reliability": 80,
+      "vehicle": { "hasVehicle": True, "type": "SUV" },
+      "surveyProvider": "설문사 A",
+    },
+    {
+      "id": "패널002",
+      "age": 42,
+      "gender": "여성",
+      "occupation": "디자이너",
+      "residence": "부산",
+      "income": 4200,
+      "reliability": 65,
+      "vehicle": { "hasVehicle": False, "type": "" },
+      "surveyProvider": "설문사 B",
+    },
+    {
+      "id": "패널003",
+      "age": 42,
+      "gender": "남성",
+      "occupation": "마케터",
+      "residence": "제주",
+      "income": 4000,
+      "reliability": 55,
+      "vehicle": { "hasVehicle": False, "type": "" },
+      "surveyProvider": "설문사 C",
+    }]
+
+    return jsonify(result)          # JSON 형태로 응답
 
 
 # 파이썬 파일을 직접 실행했을 때만 아래 코드가 작동하게 하는 조건문
