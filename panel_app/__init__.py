@@ -3,7 +3,7 @@
 
 from flask import Flask
 from flask_cors import CORS
-from .. import config
+import config
 from .models import db
 from .routes import register_routes
 
