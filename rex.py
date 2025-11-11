@@ -75,10 +75,11 @@ def create_sql_generation_prompt(user_query: str) -> str:
 8. 텍스트 검색: 휴대폰_브랜드 LIKE '%삼성%'
 9. 차량 소유: 차량여부 = '있음'
 10. 순수 SQL만 반환 (설명, 코드블록 없이)
+11. LIMIT 제한 없이 전체를 뽑는다.
 
 좋은 예시:
 - "서울 30대 남성 자녀 2명 이상"
-  → SELECT * FROM panel_responses WHERE 지역 = '서울' AND 성별 = '남성' AND 출생년도::INTEGER BETWEEN 1985 AND 1994 AND 자녀수 >= 2 LIMIT 100
+  → SELECT * FROM panel_responses WHERE 지역 = '서울' AND 성별 = '남성' AND 출생년도::INTEGER BETWEEN 1985 AND 1994 AND 자녀수 >= 2 
 
 나쁜 예시 (절대 이렇게 하지 마세요):
 - 출생년도 BETWEEN... (❌ 캐스팅 없음)
@@ -198,13 +199,13 @@ def calculate_reliability(panel, query):
                 deduction_reasons.append("미성년자이지만 자녀 보유")
             
             # 최종학력
-            education = panel.get('최종학력', '')
+            education = panel.get('최종학력') or ''  # ✅ None 방지
             if '대학교' in education and '졸업' in education:
                 score -= 10
                 deduction_reasons.append("미성년자이지만 대학교 졸업")
             
             # 직업
-            job = panel.get('직업', '')
+            job = panel.get('직업') or ''  # ✅ None 방지
             if job and job not in ['', '-', '학생', '무직']:
                 score -= 10
                 deduction_reasons.append("미성년자이지만 직업 보유")
@@ -226,21 +227,21 @@ def calculate_reliability(panel, query):
         
         # 4. 1900년대생이 중고등학생
         if birth_year and int(birth_year) < 2000:
-            job = panel.get('직업', '')
+            job = panel.get('직업') or ''  # ✅ None 방지
             if '학생' in job and ('중학' in job or '고등' in job):
                 score -= 20
                 deduction_reasons.append("성인이지만 중고등학생")
         
         # 5. 80대 이상이 학생
         if age >= 80:
-            job = panel.get('직업', '')
+            job = panel.get('직업') or ''  # ✅ None 방지
             if '학생' in job:
                 score -= 15
                 deduction_reasons.append("80세 이상이지만 학생")
     
     # ===== 학력-직업 검증 =====
-    education = panel.get('최종학력', '')
-    job = panel.get('직업', '')
+    education = panel.get('최종학력') or ''  # ✅ None 방지
+    job = panel.get('직업') or ''  # ✅ None 방지
     
     # 고졸 이하인데 전문직
     if education and ('고등학교' in education or '중학교' in education or '초등학교' in education):
@@ -259,8 +260,11 @@ def calculate_reliability(panel, query):
             deduction_reasons.append("개인소득이 가구소득보다 높음")
     
     # ===== 휴대폰 브랜드-모델 일치성 검증 =====
-    phone_brand = panel.get('휴대폰_브랜드', '').lower()
-    phone_model = panel.get('휴대폰_모델', '').lower()
+    phone_brand = panel.get('휴대폰_브랜드') or ''  # ✅ None 방지
+    phone_model = panel.get('휴대폰_모델') or ''  # ✅ None 방지
+    
+    phone_brand = str(phone_brand).lower()
+    phone_model = str(phone_model).lower()
     
     if phone_brand and phone_model and phone_brand not in ['-', ''] and phone_model not in ['-', '']:
         brand_model_map = {
@@ -278,7 +282,7 @@ def calculate_reliability(panel, query):
                     brand_matched = True
                     break
         
-        if not brand_matched and phone_model not in ['기타', '모름', '-']:
+        if not brand_matched and phone_model not in ['기타', '모름', '-', '']:
             score -= 5
             deduction_reasons.append("휴대폰 브랜드와 모델명 불일치")
     
@@ -460,8 +464,9 @@ def search():
             if len(keyword) > 1:
                 words.append({"text": keyword, "value": 10})
         
-        logging.info(f"검색 결과: {len(panels)}개 패널")
-        
+        logging.info(f"검색 결과: {len(panels)}개 패널")    
+        logging.info(f"생성된 SQL: {sql_query}")
+
         return jsonify({
             "panels": panels,
             "words": words
