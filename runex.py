@@ -1,166 +1,957 @@
-#pip install sentence-transformers scikit-learn 실행해야함
-
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from anthropic import Anthropic
+import json
+import logging
+import traceback
 import re
+from sentence_transformers import SentenceTransformer, util
+import numpy as np
+
+
 
 app = Flask(__name__)
 CORS(app)
 
-# 임베딩 모델 로드 (예: BAAI/bge-m3)
-embed_model = SentenceTransformer('BAAI/bge-m3')
+DB_CONFIG = {
+    "host": "rds-postgresql-pgvector.cbq4y662mptt.ap-northeast-2.rds.amazonaws.com",
+    "user": "root",
+    "password": "rkdtmdwls123",
+    "dbname": "postgres",
+    "port": 5432
+}
 
-# 예시 패널 데이터 5개
-panels = [
-    {"id": "패널001", "age": 22, "gender": "남성", "occupation": "학생", "residence": "서울", "income": 1000, "reliability": 85, "vehicle": {"hasVehicle": False, "type": ""}, "surveyProvider": "설문사 A"},
-    {"id": "패널002", "age": 27, "gender": "여성", "occupation": "디자이너", "residence": "부산", "income": 3200, "reliability": 100, "vehicle": {"hasVehicle": False, "type": ""}, "surveyProvider": "설문사 B"},
-    {"id": "패널003", "age": 31, "gender": "남성", "occupation": "개발자", "residence": "경기", "income": 4800, "reliability": 95, "vehicle": {"hasVehicle": True, "type": "세단"}, "surveyProvider": "설문사 C"},
-    {"id": "패널004", "age": 44, "gender": "여성", "occupation": "교사", "residence": "인천", "income": 5200, "reliability": 88, "vehicle": {"hasVehicle": True, "type": "SUV"}, "surveyProvider": "설문사 A"},
-    {"id": "패널005", "age": 36, "gender": "남성", "occupation": "마케터", "residence": "제주", "income": 4000, "reliability": 75, "vehicle": {"hasVehicle": False, "type": ""}, "surveyProvider": "설문사 B"},
-    {"id": "패널006", "age": 29, "gender": "여성", "occupation": "간호사", "residence": "서울", "income": 3900, "reliability": 100, "vehicle": {"hasVehicle": True, "type": "소형차"}, "surveyProvider": "설문사 C"},
-    {"id": "패널007", "age": 41, "gender": "남성", "occupation": "영업", "residence": "대구", "income": 5100, "reliability": 91, "vehicle": {"hasVehicle": True, "type": "SUV"}, "surveyProvider": "설문사 A"},
-    {"id": "패널008", "age": 25, "gender": "여성", "occupation": "마케터", "residence": "광주", "income": 3100, "reliability": 77, "vehicle": {"hasVehicle": False, "type": ""}, "surveyProvider": "설문사 B"},
-    {"id": "패널009", "age": 54, "gender": "남성", "occupation": "자영업", "residence": "울산", "income": 6500, "reliability": 94, "vehicle": {"hasVehicle": True, "type": "트럭"}, "surveyProvider": "설문사 A"},
-    {"id": "패널010", "age": 33, "gender": "여성", "occupation": "연구원", "residence": "경북", "income": 4700, "reliability": 89, "vehicle": {"hasVehicle": False, "type": ""}, "surveyProvider": "설문사 C"},
-    {"id": "패널011", "age": 46, "gender": "남성", "occupation": "교수", "residence": "세종", "income": 8000, "reliability": 93, "vehicle": {"hasVehicle": True, "type": "세단"}, "surveyProvider": "설문사 B"},
-    {"id": "패널012", "age": 39, "gender": "여성", "occupation": "회계사", "residence": "경기", "income": 6700, "reliability": 90, "vehicle": {"hasVehicle": True, "type": "SUV"}, "surveyProvider": "설문사 A"},
-    {"id": "패널013", "age": 50, "gender": "남성", "occupation": "관리직", "residence": "충남", "income": 7200, "reliability": 88, "vehicle": {"hasVehicle": True, "type": "세단"}, "surveyProvider": "설문사 C"},
-    {"id": "패널014", "age": 24, "gender": "여성", "occupation": "학생", "residence": "서울", "income": 1200, "reliability": 20, "vehicle": {"hasVehicle": False, "type": ""}, "surveyProvider": "설문사 A"},
-    {"id": "패널015", "age": 62, "gender": "남성", "occupation": "자영업", "residence": "부산", "income": 5000, "reliability": 87, "vehicle": {"hasVehicle": True, "type": "SUV"}, "surveyProvider": "설문사 B"},
-    {"id": "패널016", "age": 37, "gender": "여성", "occupation": "공무원", "residence": "전북", "income": 5400, "reliability": 92, "vehicle": {"hasVehicle": True, "type": "소형차"}, "surveyProvider": "설문사 C"},
-    {"id": "패널017", "age": 48, "gender": "남성", "occupation": "개발자", "residence": "강원", "income": 6800, "reliability": 85, "vehicle": {"hasVehicle": True, "type": "SUV"}, "surveyProvider": "설문사 A"},
-    {"id": "패널018", "age": 30, "gender": "여성", "occupation": "디자이너", "residence": "인천", "income": 3500, "reliability": 81, "vehicle": {"hasVehicle": False, "type": ""}, "surveyProvider": "설문사 B"},
-    {"id": "패널019", "age": 43, "gender": "남성", "occupation": "마케터", "residence": "충북", "income": 6000, "reliability": 95, "vehicle": {"hasVehicle": True, "type": "SUV"}, "surveyProvider": "설문사 A"},
-    {"id": "패널020", "age": 52, "gender": "여성", "occupation": "강사", "residence": "제주", "income": 4800, "reliability": 90, "vehicle": {"hasVehicle": True, "type": "소형차"}, "surveyProvider": "설문사 C"},
-    {"id": "패널021", "age": 28, "gender": "남성", "occupation": "학생", "residence": "서울", "income": 2100, "reliability": 10, "vehicle": {"hasVehicle": False, "type": ""}, "surveyProvider": "설문사 B"},
-    {"id": "패널022", "age": 34, "gender": "여성", "occupation": "간호사", "residence": "대전", "income": 4200, "reliability": 86, "vehicle": {"hasVehicle": True, "type": "세단"}, "surveyProvider": "설문사 C"},
-    {"id": "패널023", "age": 59, "gender": "남성", "occupation": "자영업", "residence": "전남", "income": 6100, "reliability": 100, "vehicle": {"hasVehicle": True, "type": "트럭"}, "surveyProvider": "설문사 A"},
-    {"id": "패널024", "age": 45, "gender": "여성", "occupation": "마케터", "residence": "경남", "income": 4900, "reliability": 83, "vehicle": {"hasVehicle": True, "type": "SUV"}, "surveyProvider": "설문사 B"},
-    {"id": "패널025", "age": 26, "gender": "남성", "occupation": "학생", "residence": "울산", "income": 1800, "reliability": 75, "vehicle": {"hasVehicle": False, "type": ""}, "surveyProvider": "설문사 C"},
-    {"id": "패널026", "age": 33, "gender": "여성", "occupation": "개발자", "residence": "서울", "income": 5200, "reliability": 38, "vehicle": {"hasVehicle": False, "type": ""}, "surveyProvider": "설문사 A"},
-    {"id": "패널027", "age": 40, "gender": "남성", "occupation": "공무원", "residence": "경기", "income": 6100, "reliability": 92, "vehicle": {"hasVehicle": True, "type": "세단"}, "surveyProvider": "설문사 C"},
-    {"id": "패널028", "age": 49, "gender": "여성", "occupation": "영업", "residence": "충북", "income": 5600, "reliability": 90, "vehicle": {"hasVehicle": True, "type": "SUV"}, "surveyProvider": "설문사 B"},
-    {"id": "패널029", "age": 31, "gender": "남성", "occupation": "디자이너", "residence": "부산", "income": 3700, "reliability": 84, "vehicle": {"hasVehicle": False, "type": ""}, "surveyProvider": "설문사 A"},
-    {"id": "패널030", "age": 27, "gender": "여성", "occupation": "마케터", "residence": "광주", "income": 3300, "reliability": 79, "vehicle": {"hasVehicle": False, "type": ""}, "surveyProvider": "설문사 C"},
-    {"id": "패널031", "age": 42, "gender": "남성", "occupation": "교사", "residence": "전북", "income": 5800, "reliability": 91, "vehicle": {"hasVehicle": True, "type": "SUV"}, "surveyProvider": "설문사 B"},
-    {"id": "패널032", "age": 38, "gender": "여성", "occupation": "연구원", "residence": "서울", "income": 6400, "reliability": 43, "vehicle": {"hasVehicle": True, "type": "세단"}, "surveyProvider": "설문사 A"},
-    {"id": "패널033", "age": 24, "gender": "남성", "occupation": "학생", "residence": "경기", "income": 1600, "reliability": 70, "vehicle": {"hasVehicle": False, "type": ""}, "surveyProvider": "설문사 C"},
-    {"id": "패널034", "age": 57, "gender": "여성", "occupation": "자영업", "residence": "대구", "income": 7000, "reliability": 96, "vehicle": {"hasVehicle": True, "type": "SUV"}, "surveyProvider": "설문사 B"},
-    {"id": "패널035", "age": 44, "gender": "남성", "occupation": "마케터", "residence": "서울", "income": 5600, "reliability": 89, "vehicle": {"hasVehicle": True, "type": "SUV"}, "surveyProvider": "설문사 A"},
-    {"id": "패널036", "age": 53, "gender": "여성", "occupation": "교사", "residence": "경남", "income": 6300, "reliability": 92, "vehicle": {"hasVehicle": True, "type": "세단"}, "surveyProvider": "설문사 C"},
-    {"id": "패널037", "age": 29, "gender": "남성", "occupation": "개발자", "residence": "인천", "income": 4700, "reliability": 50, "vehicle": {"hasVehicle": False, "type": ""}, "surveyProvider": "설문사 B"},
-    {"id": "패널038", "age": 48, "gender": "여성", "occupation": "회계사", "residence": "서울", "income": 7100, "reliability": 95, "vehicle": {"hasVehicle": True, "type": "SUV"}, "surveyProvider": "설문사 A"},
-    {"id": "패널039", "age": 39, "gender": "남성", "occupation": "공무원", "residence": "충남", "income": 5800, "reliability": 88, "vehicle": {"hasVehicle": True, "type": "소형차"}, "surveyProvider": "설문사 C"},
-    {"id": "패널040", "age": 26, "gender": "여성", "occupation": "학생", "residence": "부산", "income": 2200, "reliability": 73, "vehicle": {"hasVehicle": False, "type": ""}, "surveyProvider": "설문사 B"},
-    {"id": "패널041", "age": 34, "gender": "남성", "occupation": "마케터", "residence": "광주", "income": 4200, "reliability": 85, "vehicle": {"hasVehicle": True, "type": "세단"}, "surveyProvider": "설문사 A"},
-    {"id": "패널042", "age": 60, "gender": "여성", "occupation": "자영업", "residence": "경북", "income": 6200, "reliability": 10, "vehicle": {"hasVehicle": True, "type": "SUV"}, "surveyProvider": "설문사 C"},
-    {"id": "패널043", "age": 32, "gender": "남성", "occupation": "디자이너", "residence": "경기", "income": 4300, "reliability": 82, "vehicle": {"hasVehicle": False, "type": ""}, "surveyProvider": "설문사 B"},
-    {"id": "패널044", "age": 55, "gender": "여성", "occupation": "교수", "residence": "세종", "income": 7500, "reliability": 94, "vehicle": {"hasVehicle": True, "type": "SUV"}, "surveyProvider": "설문사 A"},
-    {"id": "패널045", "age": 46, "gender": "남성", "occupation": "관리직", "residence": "서울", "income": 6900, "reliability": 92, "vehicle": {"hasVehicle": True, "type": "세단"}, "surveyProvider": "설문사 C"},
-    {"id": "패널046", "age": 28, "gender": "여성", "occupation": "연구원", "residence": "경기", "income": 3900, "reliability": 79, "vehicle": {"hasVehicle": False, "type": ""}, "surveyProvider": "설문사 B"},
-    {"id": "패널047", "age": 36, "gender": "남성", "occupation": "개발자", "residence": "대구", "income": 5100, "reliability": 100, "vehicle": {"hasVehicle": True, "type": "SUV"}, "surveyProvider": "설문사 A"},
-    {"id": "패널048", "age": 30, "gender": "여성", "occupation": "간호사", "residence": "인천", "income": 4200, "reliability": 87, "vehicle": {"hasVehicle": False, "type": ""}, "surveyProvider": "설문사 C"},
-    {"id": "패널049", "age": 41, "gender": "남성", "occupation": "마케터", "residence": "전남", "income": 5300, "reliability": 89, "vehicle": {"hasVehicle": True, "type": "세단"}, "surveyProvider": "설문사 B"},
-    {"id": "패널050", "age": 58, "gender": "여성", "occupation": "공무원", "residence": "서울", "income": 6400, "reliability": 93, "vehicle": {"hasVehicle": True, "type": "SUV"}, "surveyProvider": "설문사 A"},
-]
+client = Anthropic(api_key="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")
 
-# 추천 검색어 후보 리스트
-candidate_keywords = [
-    "서울 30대 남성",
-    "고소득 40대",
-    "마케팅 프리랜서",
-    "디자이너 부산",
-    "프리랜서 차량 보유",
-    "학생 인천",
-    "교사 광주",
-    "SUV 보유",
-    "20대 여성",
-    "30대 개발자"
-]
+# ============================================================
+# 신뢰도 계산 관련 상수 및 유틸리티
+# ============================================================
 
-# 임베딩 함수
-def get_embedding(texts):
-    embeddings = embed_model.encode(texts, convert_to_numpy=True)
-    return embeddings
+NULL_TOKENS = {"", ",", ";", "/", "-", "모름", "무응답", "모름/무응답", "해당없음", None}
 
-# 추천어 줌?
-@app.route('/api/related-searches', methods=['POST'])
-def related_searches():
-    data = request.get_json()
-    query = data.get('query', '').strip()
+INCOME_RANK = {
+    "월 100만원 미만": 1,
+    "월 100~199만원": 2,
+    "월 200~299만원": 3,
+    "월 300~399만원": 4,
+    "월 400~499만원": 5,
+    "월 500~599만원": 6,
+    "월 600~699만원": 7,
+    "월 700~799만원": 8,
+    "월 800~899만원": 9,
+    "월 900~999만원": 10,
+    "월 1000만원 이상": 11,
+    "모름/무응답": None,
+    "": None    
+}
 
-    if not query:
-        return jsonify([])
+RULE_MESSAGES = {
+    "required_birth_year_missing": "필수정보 누락 : 나이",
+    "required_occupation_missing": "필수정보 누락 : 직업",
+    "required_income_missing": "필수정보 누락 : 개인소득",
+    "age_married_under18": "18세 미만인데 결혼 상태",
+    "age_child_under18": "18세 미만인데 자녀 있음",
+    "age_college_under18": "18세 미만인데 대학 재학/졸업 이상",
+    "age_car_under18_hascar": "만 18세 미만 차량 보유",
+    "age_car_under18_maker_filled": "만 18세 미만인데 자동차 제조사 기입",
+    "age_car_under18_model_filled": "만 18세 미만인데 자동차 모델 기입",
+    "old_student_80plus": "80세 이상인데 학생",
+    "born_before_1990_secondary_student": "1990년 이전 출생인데 중/고등학생",
+    "teen_smoker": "미성년 흡연 경험",
+    "teen_drink": "미성년 음주 경험",
+    "brand_without_smoke": "흡연경험 없음인데 담배브랜드 선택",
+    "brand_etc_without_smoke": "흡연경험 없음인데 담배브랜드 기타내용 입력",
+    "heat_e_cig_without_smoke": "흡연경험 없음인데 가열식/전자담배 선택",
+    "alcohol_memo_without_drink": "음용경험 없음인데 술 기타내용 입력",
+    "lowedu_projob": "고졸 이하인데 전문직",
+    "personal_gt_household": "월 개인소득 > 월 가구소득",
+    "phone_brand_model_mismatch": "휴대폰 브랜드/모델 불일치",
+    "old_student_flag": "50세 이상인데 대학생/대학원생",
+    "car_brand_but_no_model": "차량 브랜드 있음 + 차종 없음",
+    "car_model_but_no_brand": "차량 브랜드 없음 + 차종 있음",
+    "car_have_N_but_brand_or_model": "차량 보유 '없다'인데 브랜드/모델 기재",
+    "car_brand_model_mismatch_heuristic": "차량 브랜드/모델 불일치(휴리스틱)",
+}
 
-    query_emb = get_embedding([query])[0]
-    keywords_emb = get_embedding(candidate_keywords)
-    sims = cosine_similarity([query_emb], keywords_emb)[0]
+# 차량 브랜드 정규화 매핑
+_CAR_BRAND_ALIASES = {
+    "현대": {"현대", "현대자동차", "hyundai"},
+    "기아": {"기아", "기아자동차", "kia"},
+    "제네시스": {"제네시스", "genesis"},
+    "르노코리아": {"르노코리아", "르노삼성", "르노", "renault", "renault samsung", "renault korea"},
+    "쉐보레": {"쉐보레", "chevrolet", "gm", "gm대우", "대우"},
+    "쌍용": {"쌍용", "쌍용자동차", "kg모빌리티", "kg mobility", "ssangyong"},
+    "메르세데스-벤츠": {"메르세데스-벤츠", "벤츠", "mercedes", "mercedes-benz", "m-benz"},
+    "BMW": {"bmw", "비엠더블유", "비엠"},
+    "아우디": {"audi", "아우디"},
+    "폭스바겐": {"vw", "volkswagen", "폭스바겐"},
+    "토요타": {"toyota", "토요타"},
+    "혼다": {"honda", "혼다"},
+    "닛산": {"nissan", "닛산"},
+    "렉서스": {"lexus", "렉서스"},
+    "포르쉐": {"porsche", "포르쉐"},
+}
 
-    related = []
-    for idx in sims.argsort()[::-1][:5]:
-        related.append({
-            "text": candidate_keywords[idx],
-            "similarity": float(sims[idx])
-        })
+# 차량 모델 패턴
+_CAR_BRAND_MODEL_PATTERNS = {
+    "현대": [
+        r"\b(아반떼|쏘나타|그랜저|투싼|싼타페|팰리세이드|베뉴|캐스퍼|코나|아이오닉|넥쏘)\b",
+        r"\b(IONIQ|NEXO|SANTA\s?FE|PALISADE|TUCSON|KONA|AVANTE|SONATA|GRANDEUR)\b",
+    ],
+    "기아": [
+        r"\b(K[3-9]|K\d{1,2}|쏘렌토|스포티지|모닝|레이|니로|카니발|EV\d+|EV[36])\b",
+        r"\b(SORENTO|SPORTAGE|CARNIVAL|MORNING|RAY|NIRO)\b",
+    ],
+    "제네시스": [r"\b(GV?\d{2}|G70|G80|G90|GV60|GV70|GV80|GV90)\b"],
+    "르노코리아": [r"\b(QM\d|XM3|SM\d|SM6)\b"],
+    "쉐보레": [
+        r"\b(스파크|말리부|임팔라|트랙스|이쿼녹스|트래버스|콜로라도|타호|카마로|트레일블레이저)\b",
+        r"\b(SPARK|MALIBU|IMPALA|TRAX|EQUINOX|TRAVERSE|COLORADO|TAHOE|CAMARO|TRAILBLAZER)\b",
+    ],
+    "쌍용": [r"\b(렉스턴|코란도|티볼리|토레스)\b", r"\b(REXTON|KORANDO|TIVOLI|TORRES)\b"],
+    "메르세데스-벤츠": [r"\b([CES]\s?-?\d{2,3}|GL[ABC]?|GLE|GLS|S\s?CLASS|E\s?CLASS|C\s?CLASS|AMG|EQ[BS]?\d*)\b"],
+    "BMW": [r"\b([1-8]\s?시리즈|[1-8]\s?Series|X[1-7]|M\d{1,3}|i\d|i3|i4|i5|i7|320|520)\b"],
+    "아우디": [r"\b(A[1-8]|Q[2-8]|e-?tron)\b"],
+    "폭스바겐": [r"\b(티구안|골프|아테온|파사트|TIGUAN|GOLF|ARTEON|PASSAT)\b"],
+    "토요타": [r"\b(캠리|코롤라|라브4|프리우스|GR86|CAMRY|COROLLA|RAV4|PRIUS)\b"],
+    "혼다": [r"\b(어코드|시빅|CR-?V|HR-?V|ACCORD|CIVIC|CRV|HRV)\b"],
+    "닛산": [r"\b(알티마|로그|캐시카이|노트|리프|ALTIMA|ROGUE|QASHQAI|LEAF)\b"],
+    "렉서스": [r"\b(ES\d*|RX\d*|NX\d*|UX\d*|IS\d*|LS\d*)\b"],
+    "포르쉐": [r"\b(911|카이엔|마칸|파나메라|타이칸|CAYENNE|MACAN|PANAMERA|TAYCAN)\b"],
+}
 
-    return jsonify(related)
+def norm_str(x):
+    """문자열 정규화 (int/float 타입도 처리)"""
+    if x is None:
+        return ""
+    # int나 float인 경우 문자열로 변환
+    if isinstance(x, (int, float)):
+        return str(x)
+    # 문자열인 경우 strip
+    s = str(x).strip()
+    if all(ch in {',',';','/','-','·','.'} for ch in s):
+        return ""
+    return s
 
-def filter_panels_by_query(query, panels):
-    # 연령대 추출 (예: '20대' -> 20~29)
-    age_min, age_max = None, None
-    age_match = re.search(r"(\d{2})대", query)
-    if age_match:
-        age_start = int(age_match.group(1))
-        age_min, age_max = age_start * 10, age_start * 10 + 9
+def is_meaningful_text(x):
+    """의미있는 텍스트인지 확인"""
+    s = norm_str(x)
+    return s not in NULL_TOKENS and s != ""
 
-    # 성별 추출
-    gender = None
-    if re.search(r"남[자성]", query):
-        gender = "남성"
-    elif re.search(r"여[자성]", query):
-        gender = "여성"
+def norm_list(xs):
+    """리스트 정규화"""
+    if xs is None: return []
+    if isinstance(xs, str): xs = [xs]
+    out = []
+    for x in xs:
+        s = norm_str(x)
+        if is_meaningful_text(s):
+            out.append(s)
+    return out
 
-    # 거주지 추출
-    residences = ['서울', '부산', '제주', '인천', '대구', '광주']
-    residence = next((city for city in residences if city in query), None)
+def _norm_text_none(x):
+    """None-safe 텍스트 정규화"""
+    s = str(x).strip() if x is not None else ""
+    return s if s else None
 
-    # 직업 추출
-    occupations = ['개발자', '디자이너', '마케터', '프리랜서', '학생', '교사']
-    occupation = next((job for job in occupations if job in query), None)
+def _canonical_car_brand(brand_text):
+    """차량 브랜드 정규화"""
+    b = _norm_text_none(brand_text)
+    if b is None:
+        return None
+    bl = b.lower()
+    for canon, aliases in _CAR_BRAND_ALIASES.items():
+        for a in aliases:
+            if bl == a.lower():
+                return canon
+    return b
 
-    def match(panel):
-        if age_min is not None and not (age_min <= panel['age'] <= age_max):
-            return False
-        if gender is not None and panel['gender'] != gender:
-            return False
-        if residence is not None and panel['residence'] != residence:
-            return False
-        if occupation is not None and panel['occupation'] != occupation:
-            return False
+def _guess_brands_from_model(model_text):
+    """모델명에서 브랜드 추정"""
+    m = _norm_text_none(model_text)
+    if m is None:
+        return set()
+    u = m.upper()
+    hits = set()
+    for brand, pats in _CAR_BRAND_MODEL_PATTERNS.items():
+        if any(re.search(p, u, flags=re.IGNORECASE) for p in pats):
+            hits.add(brand)
+    return hits
+
+def _car_model_matches_brand(brand_text, model_text):
+    """차량 브랜드-모델 일치 확인"""
+    brand = _canonical_car_brand(brand_text)
+    model = _norm_text_none(model_text)
+    if not brand or not model:
+        return None
+    cand = _guess_brands_from_model(model)
+    if len(cand) == 0:
+        return None
+    if len(cand) == 1:
+        return (brand == next(iter(cand)))
+    return None
+
+def _brand_group_from_text(brand):
+    """휴대폰 브랜드 그룹 판별"""
+    b = brand
+    if not b: return None
+    if "애플" in b or "Apple" in b or "아이폰" in b: return "apple"
+    if "삼성" in b or "갤럭시" in b or "Galaxy" in b or "노트" in b: return "samsung"
+    if "LG" in b: return "lg"
+    if "샤오미" in b or "Xiaomi" in b or "포코" in b or "홍미" in b or "레드미" in b: return "xiaomi"
+    if "기타" in b: return "etc"
+    return None
+
+def _model_group_from_text(model):
+    """휴대폰 모델 그룹 판별"""
+    m = model
+    if not m: return None
+    if "폴더폰" in m or "보유 X" in m or ("기타" in m and "아이폰" not in m and "갤럭시" not in m and "LG" not in m and "샤오미" not in m):
+        return "special"
+    if "아이폰" in m: return "apple"
+    if "갤럭시" in m or "Galaxy" in m or "노트" in m or "Z Fold" in m or "Z Flip" in m: return "samsung"
+    if "LG" in m or "V 시리즈" in m or "G 시리즈" in m: return "lg"
+    if "샤오미" in m or "포코" in m or "홍미" in m or "레드미" in m: return "xiaomi"
+    return None
+
+def _any_smoke_selected(smoke_set):
+    """흡연 경험 체크"""
+    items = norm_list(smoke_set)
+    NEG_SMOKE = "담배를 피워본 적이 없다"
+    for s in items:
+        if NEG_SMOKE in s:
+            continue
         return True
+    return False
 
-    return [p for p in panels if match(p)]
+def _is_under(n, limit):
+    """나이 미만 체크"""
+    return (n is not None) and (n < limit)
+
+def _is_overeq(n, limit):
+    """나이 이상 체크"""
+    return (n is not None) and (n >= limit)
+
+def _get(row, key, default=None):
+    """안전한 딕셔너리 접근"""
+    return row.get(key, default)
+
+# ============================================================
+# 패널 데이터 전처리
+# ============================================================
+
+def preprocess_panel(row):
+    """패널 데이터 전처리 및 메타데이터 생성"""
+    r = dict(row)
+
+    # 나이 계산
+    birth = _get(r, "출생년도")
+    try:
+        if isinstance(birth, int):
+            birth_int = birth
+        else:
+            birth_int = int(str(birth).strip())
+        r["age"] = 2025 - birth_int
+    except Exception:
+        r["age"] = None
+
+    # 가족수 정규화
+    fam_text = norm_str(_get(r, "가족수"))
+    fam_map = {"1명(혼자 거주)": 1, "2명": 2, "3명": 3, "4명": 4, "5명 이상": 5}
+    r["_가족수_수치"] = fam_map.get(fam_text, None)
+    
+    # 자녀수 안전 처리 (이미 int일 수 있음)
+    children = _get(r, "자녀수")
+    if isinstance(children, int):
+        r["_자녀수"] = children
+    elif children:
+        try:
+            r["_자녀수"] = int(norm_str(children))
+        except:
+            r["_자녀수"] = 0
+    else:
+        r["_자녀수"] = 0
+
+    # 기본 정보 정규화
+    r["_학력"] = norm_str(_get(r, "최종학력"))
+    r["_직업"] = norm_str(_get(r, "직업"))
+    r["_결혼"] = norm_str(_get(r, "결혼여부"))
+
+    # 소득 랭크
+    r["_개인소득_랭크"] = INCOME_RANK.get(norm_str(_get(r, "월평균_개인소득")), None)
+    r["_가구소득_랭크"] = INCOME_RANK.get(norm_str(_get(r, "월평균_가구소득")), None)
+
+    # 멀티선택 정규화
+    r["_흡연_set"] = norm_list(_get(r, "흡연경험", []))
+    r["_담배브랜드_set"] = norm_list(_get(r, "흡연경험_담배브랜드", []))
+    r["_가열식_set"] = norm_list(_get(r, "전자담배_이용경험", []))
+    r["_주류_set"] = norm_list(_get(r, "음용경험_술", []))
+
+    # ETC 플래그
+    r["_담배브랜드_ETC"] = is_meaningful_text(_get(r, "흡연경험_담배브랜드_기타"))
+    r["_가열식_ETC"] = is_meaningful_text(_get(r, "흡연경험_담배_기타내용"))
+    r["_술_ETC"] = is_meaningful_text(_get(r, "음용경험_술_기타내용"))
+
+    # 휴대폰 정보
+    r["_폰브랜드"] = norm_str(_get(r, "휴대폰_브랜드"))
+    r["_폰모델"] = norm_str(_get(r, "휴대폰_모델"))
+
+    # 차량 정보
+    r["_차량보유"] = norm_str(_get(r, "차량여부"))
+    r["_제조사"] = _norm_text_none(_get(r, "자동차_제조사"))
+    r["_차모델"] = _norm_text_none(_get(r, "자동차_모델"))
+
+    return r
+
+# ============================================================
+# 신뢰도 규칙 정의
+# ============================================================
+
+def get_reliability_rules():
+    """신뢰도 검증 규칙 리스트 반환"""
+    return [
+        # 필수 항목 체크 (각 26점 감점)
+        ("required_birth_year_missing",
+         lambda r: not r.get("출생년도") or r.get("출생년도") in ["", "-", None, "무응답"]),
+        
+        ("required_occupation_missing",
+         lambda r: not r.get("직업") or r.get("직업") in ["", "-", None, "무응답"]),
+        
+        ("required_income_missing",
+         lambda r: not r.get("월평균_개인소득") or r.get("월평균_개인소득") in ["", "-", None, "무응답"]),
+        
+        # 연령 기반
+        ("age_married_under18",
+         lambda r: _is_under(r.get("age"), 18) and (r["_결혼"] in ["기혼", "기타(사별/이혼 등)"])),
+        
+        ("age_child_under18",
+         lambda r: _is_under(r.get("age"), 18) and (r.get("_자녀수", 0) > 0)),
+        
+        ("age_college_under18",
+         lambda r: _is_under(r.get("age"), 18) and (r["_학력"] in ["대학교 재학(휴학 포함)", "대학교 졸업", "대학원 재학/졸업 이상"])),
+
+        ("old_student_80plus",
+         lambda r: _is_overeq(r.get("age"), 80) and (r["_직업"] in ["중/고등학생", "대학생/대학원생"])),
+
+        # 차량 (만 18세 미만으로 변경)
+        ("age_car_under18_hascar",
+         lambda r: _is_under(r.get("age"), 18) and (r["_차량보유"] == "있다")),
+        
+        ("age_car_under18_maker_filled",
+         lambda r: _is_under(r.get("age"), 18) and bool(r["_제조사"])),
+        
+        ("age_car_under18_model_filled",
+         lambda r: _is_under(r.get("age"), 18) and bool(r["_차모델"])),
+
+        # 흡연/음주 (미성년)
+        ("teen_smoker",
+         lambda r: _is_under(r.get("age"), 19) and _any_smoke_selected(r["_흡연_set"])),
+        
+        ("teen_drink",
+         lambda r: _is_under(r.get("age"), 19) and any(a for a in r["_주류_set"] if "최근 1년 이내 술을 마시지 않음" not in a)),
+
+        # 흡연경험 없음인데 관련 기입
+        ("brand_without_smoke",
+         lambda r: (len(r["_흡연_set"]) == 0 or not _any_smoke_selected(r["_흡연_set"])) and len(r["_담배브랜드_set"]) > 0),
+        
+        ("brand_etc_without_smoke",
+         lambda r: (len(r["_흡연_set"]) == 0 or not _any_smoke_selected(r["_흡연_set"])) and r["_담배브랜드_ETC"]),
+        
+        ("heat_e_cig_without_smoke",
+         lambda r: (len(r["_흡연_set"]) == 0 or not _any_smoke_selected(r["_흡연_set"])) and (len(r["_가열식_set"]) > 0 or r["_가열식_ETC"])),
+        
+        ("alcohol_memo_without_drink",
+         lambda r: (len(r["_주류_set"]) == 0 or all("최근 1년 이내 술을 마시지 않음" in a for a in r["_주류_set"])) and r["_술_ETC"]),
+
+        # 학력/직업
+        ("lowedu_projob",
+         lambda r: (r["_학력"] in ["고등학교 졸업 이하"]) and (r["_직업"] == "전문직 (의사, 간호사, 변호사, 회계사, 예술가, 종교인, 엔지니어, 프로그래머, 기술사 등)")),
+
+        # 소득(서열)
+        ("personal_gt_household",
+         lambda r: (r["_개인소득_랭크"] is not None and r["_가구소득_랭크"] is not None) and
+                   (r["_개인소득_랭크"] > r["_가구소득_랭크"])),
+
+        # 휴대폰 브랜드/모델 불일치
+        ("phone_brand_model_mismatch",
+         lambda r: (lambda bg, mg: (
+             False if (bg is None or mg is None or mg == "special")
+             else ((bg == "apple"   and mg != "apple") or
+                   (bg == "samsung" and mg != "samsung") or
+                   (bg == "lg"      and mg != "lg") or
+                   (bg == "xiaomi"  and mg != "xiaomi"))
+         ))(_brand_group_from_text(r["_폰브랜드"]),
+            _model_group_from_text(r["_폰모델"]))),
+
+        # 선택 규칙
+        ("old_student_flag",
+         lambda r: (r.get("age") is not None) and (r["age"] >= 50) and (r["_직업"] == "대학생/대학원생")),
+
+        ("born_before_1990_secondary_student",
+         lambda r: (
+             (_get(r, "출생년도") and (
+                 (isinstance(_get(r, "출생년도"), int) and _get(r, "출생년도") < 1990) or
+                 (isinstance(_get(r, "출생년도"), str) and int(_get(r, "출생년도")) < 1990)
+             )) and (r["_직업"] == "중/고등학생")
+         )),
+
+        # 차량 불일치/누락 규칙
+        ("car_brand_but_no_model",
+         lambda r: bool(_norm_text_none(r.get("_제조사"))) and not _norm_text_none(r.get("_차모델"))),
+
+        ("car_model_but_no_brand",
+         lambda r: not _norm_text_none(r.get("_제조사")) and bool(_norm_text_none(r.get("_차모델")))),
+
+        ("car_have_N_but_brand_or_model",
+         lambda r: (r.get("_차량보유") == "없다") and (bool(_norm_text_none(r.get("_제조사"))) or bool(_norm_text_none(r.get("_차모델"))))),
+
+        ("car_brand_model_mismatch_heuristic",
+         lambda r: (lambda ok: (ok is False))(_car_model_matches_brand(r.get("_제조사"), r.get("_차모델")))),
+    ]
+
+def calculate_reliability_score(row):
+    rr = preprocess_panel(row)
+    rules = get_reliability_rules()
+    detail = {name: bool(fn(rr)) for name, fn in rules}
+    hit_rules = [k for k, v in detail.items() if v]
+    hit_messages = [RULE_MESSAGES.get(k, k) for k in hit_rules]
+
+    # 필수정보 누락에 대한 감점 처리 (각 26점씩)
+    required_missing_count = sum(1 for rule in ["required_birth_year_missing", "required_occupation_missing", "required_income_missing"] if rule in hit_rules)
+    
+    # 다른 규칙에 대한 감점 (각 5점씩)
+    other_rules = [rule for rule in hit_rules if rule not in ["required_birth_year_missing", "required_occupation_missing", "required_income_missing"]]
+    
+    score = 100 - (26 * required_missing_count) - (5 * len(other_rules))
+    score = max(0, score)
+    
+    return score, hit_rules, hit_messages
+
+
+# ============================================================
+# 패널 텍스트화
+# ============================================================
+
+def panel_to_text(r):
+    """패널 데이터를 자연어 텍스트로 변환"""
+    parts = []
+    
+    # 1) 성별 + 연령
+    gender = r.get("성별")
+    if gender:
+        parts.append(f"{gender}이다.")
+    
+    birth = r.get("출생년도")
+    age = r.get("age")
+    if age:
+        parts.append(f"{birth}년생으로 {age}세이다.")
+    elif birth:
+        parts.append(f"{birth}년생이다.")
+    
+    # 2) 거주지역
+    region1 = r.get("지역")
+    region2 = r.get("지역구")
+    if region1 and region2:
+        parts.append(f"{region1} {region2} 거주자이다.")
+    elif region1:
+        parts.append(f"{region1} 거주자이다.")
+    
+    # 3) 개인소득 / 가구소득
+    personal = r.get("월평균_개인소득")
+    household = r.get("월평균_가구소득")
+    if personal:
+        parts.append(f"월 개인소득은 {personal} 수준이다.")
+    if household:
+        parts.append(f"월 가구소득은 {household} 수준이다.")
+    
+    # 4) 직업 / 학력
+    job = r.get("직업")
+    edu = r.get("최종학력")
+    if job:
+        parts.append(f"직업은 {job}이다.")
+    if edu:
+        parts.append(f"최종학력은 {edu}이다.")
+    
+    # 5) 차량 / 휴대폰
+    car = r.get("차량여부")
+    if car:
+        parts.append(f"차량 보유 여부는 {car}이다.")
+    
+    phone_brand = r.get("휴대폰_브랜드")
+    phone_model = r.get("휴대폰_모델")
+    if phone_brand and phone_model:
+        parts.append(f"{phone_brand}의 {phone_model}을 사용하고 있다.")
+    elif phone_brand:
+        parts.append(f"{phone_brand} 스마트폰을 사용하고 있다.")
+    
+    # 6) 흡연 / 음주
+    smokes = r.get("흡연경험") or []
+    if smokes:
+        smoke_str = ", ".join(smokes) if isinstance(smokes, list) else str(smokes)
+        parts.append(f"흡연경험으로는 {smoke_str} 경험이 있다.")
+    
+    drinks = r.get("음용경험_술") or []
+    if drinks:
+        drink_str = ", ".join(drinks) if isinstance(drinks, list) else str(drinks)
+        parts.append(f"음주 경험으로는 {drink_str} 경험이 있다.")
+    
+    return " ".join(parts)
+
+# ============================================================
+# SQL 생성 프롬프트
+# ============================================================
+
+def create_sql_generation_prompt(user_query: str) -> str:
+    return f"""당신은 PostgreSQL SQL 쿼리 생성 전문가입니다.
+
+테이블 이름: welcome_cb_scored
+
+테이블 스키마 (정확한 컬럼명):
+- 패널id (VARCHAR, PRIMARY KEY) ⚠️ 소문자 'id' 주의!
+- 성별 (VARCHAR) - 예: '남성', '여성'
+- 출생년도 (VARCHAR) ⚠️ 문자열이므로 숫자 비교시 반드시 ::INTEGER 캐스팅 필요!
+- 지역 (VARCHAR) - 예: '서울', '부산', '경기', '인천' 등
+- 지역구 (VARCHAR)
+- 결혼여부 (VARCHAR) - 예: '기혼', '미혼'
+- 자녀수 (INTEGER) - 이미 숫자형이므로 캐스팅 불필요
+- 가족수 (VARCHAR) - 숫자 비교시 ::INTEGER 캐스팅 필요
+- 최종학력 (VARCHAR)
+- 직업 (VARCHAR)
+- 직무 (VARCHAR)
+- 월평균_개인소득 (VARCHAR)
+- 월평균_가구소득 (VARCHAR)
+- 보유전제품 (JSONB)
+- 휴대폰_브랜드 (VARCHAR)
+- 휴대폰_모델 (VARCHAR)
+- 차량여부 (VARCHAR) - 예: '있다', '없다'
+- 자동차_제조사 (VARCHAR)
+- 자동차_모델 (VARCHAR)
+- 흡연경험 (JSONB)
+- 흡연경험_담배브랜드 (JSONB)
+- 흡연경험_담배브랜드_기타 (VARCHAR)
+- 전자담배_이용경험 (JSONB)
+- 흡연경험_담배_기타내용 (VARCHAR)
+- 음용경험_술 (JSONB)
+- 음용경험_술_기타내용 (VARCHAR)
+
+사용자 요청: "{user_query}"
+
+쿼리 생성 규칙 (매우 중요!):
+1. 기본 형식: SELECT * FROM welcome_cb_scored
+2. 컬럼명 정확히 사용: 패널id (대문자 ID 아님!)
+3. 출생년도로 나이 계산 시 반드시 ::INTEGER 캐스팅:
+   ✅ 올바른 예: 출생년도::INTEGER BETWEEN 1985 AND 1994
+   ❌ 틀린 예: 출생년도 BETWEEN 1985 AND 1994
+4. 나이대별 출생년도 (2025년 기준):
+   - 10대: 출생년도::INTEGER BETWEEN 2006 AND 2015
+   - 20대: 출생년도::INTEGER BETWEEN 1995 AND 2005
+   - 30대: 출생년도::INTEGER BETWEEN 1985 AND 1994
+   - 40대: 출생년도::INTEGER BETWEEN 1975 AND 1984
+   - 50대: 출생년도::INTEGER BETWEEN 1965 AND 1974
+   - 60대: 출생년도::INTEGER BETWEEN 1955 AND 1964
+5. 자녀수는 이미 INTEGER이므로: 자녀수 >= 2 (캐스팅 불필요)
+6. 가족수는 VARCHAR이므로: 가족수::INTEGER >= 4 (캐스팅 필요)
+7. JSONB 존재 확인: 흡연경험 IS NOT NULL
+8. 텍스트 검색: 휴대폰_브랜드 LIKE '%삼성%'
+9. 차량 소유: 차량여부 = '있음'
+10. 순수 SQL만 반환 (설명, 코드블록 없이)
+11. LIMIT 처리 규칙:
+    - 사용자가 인원수를 명시한 경우: LIMIT [인원수]를 반드시 추가
+    - 인원수 표현: "10명", "50명", "100명", "10개", "50개", "100개 패널" 등
+    - 사용자가 인원수를 명시하지 않은 경우: LIMIT 없이 전체 결과 반환
+12. NULL 값 처리:
+    - NULL 값은 백엔드에서 '무응답'으로 자동 변환됨
+    - WHERE 조건에서 NULL 체크: 컬럼명 IS NOT NULL
+13. 고소득자 기준 (매우 중요!):
+    - "고소득자", "고소득", "높은 소득" 등의 키워드가 있을 때:
+    - 반드시 월평균_개인소득만 사용 (월평균_가구소득은 사용 금지!)
+    - 개인소득 400만원 이상 = 고소득자
+    - 조건: 월평균_개인소득 IN ('월 400~499만원', '월 500~599만원', '월 600~699만원', '월 700~799만원', '월 800~899만원', '월 900~999만원', '월 1000만원 이상')
+    - ✅ 올바른 예: WHERE 월평균_개인소득 IN ('월 400~499만원', '월 500~599만원', '월 600~699만원', '월 700~799만원', '월 800~899만원', '월 900~999만원', '월 1000만원 이상')
+    - ❌ 틀린 예: WHERE 월평균_가구소득 ... (가구소득 사용 금지)
+
+좋은 예시:
+- "서울 30대 남성 자녀 2명 이상"
+  → SELECT * FROM welcome_cb_scored WHERE 지역 = '서울' AND 성별 = '남성' AND 출생년도::INTEGER BETWEEN 1985 AND 1994 AND 자녀수 >= 2
+
+- "서울 30대 남성 50명"
+  → SELECT * FROM welcome_cb_scored WHERE 지역 = '서울' AND 성별 = '남성' AND 출생년도::INTEGER BETWEEN 1985 AND 1994 LIMIT 50
+
+- "서울 고소득자 남성"
+  → SELECT * FROM welcome_cb_scored WHERE 지역 = '서울' AND 성별 = '남성' AND 월평균_개인소득 IN ('월 400~499만원', '월 500~599만원', '월 600~699만원', '월 700~799만원', '월 800~899만원', '월 900~999만원', '월 1000만원 이상')
+
+- "20대 고소득자"
+  → SELECT * FROM welcome_cb_scored WHERE 출생년도::INTEGER BETWEEN 1995 AND 2005 AND 월평균_개인소득 IN ('월 400~499만원', '월 500~599만원', '월 600~699만원', '월 700~799만원', '월 800~899만원', '월 900~999만원', '월 1000만원 이상')
+
+나쁜 예시 (절대 이렇게 하지 마세요):
+- 출생년도 BETWEEN... (❌ 캐스팅 없음)
+- 패널ID (❌ 대문자 ID)
+- 인원수가 명시되었는데 LIMIT 없음 (❌)
+- 고소득자 조건에서 월평균_가구소득 사용 (❌ 반드시 월평균_개인소득만 사용!)
+
+지금 SQL 쿼리를 생성하세요 (순수 SQL만):"""
+
+# ============================================================
+# API 엔드포인트
+# ============================================================
 
 @app.route('/api/search', methods=['POST'])
 def search():
-    data = request.get_json()               # axios.post()로 보낸 json 데이터를 파싱
-    query = data.get('query', '').strip()   # 딕셔너리처럼 접근 가능
-    print(f"쿼리 수신: {query}")
+    try:
+        data = request.get_json()
+        query = data.get('query', '').strip()
 
-    # 연관어 로직 함수 사용해야함 (지금은 임의로 연관어 목 데이터 사용)
-    words = ["남성", "서울", "회사원", "고소득", "차량", "20대", "30대", "40대"] 
+        if not query:
+            return jsonify({"error": "쿼리를 입력해주세요."}), 400
 
-    filtered_panels = filter_panels_by_query(query, panels)  # 이거 뭔지 모르겠음
-    return jsonify({
-        "panels" : filtered_panels,  # 추출 패널 데이터
-        "words": words,   # 추천 검색어 
-    }) 
+        logging.info(f"🔍 검색 쿼리: {query}")
 
+        # Claude API로 SQL 쿼리 생성
+        message = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1024,
+            messages=[
+                {"role": "user", "content": create_sql_generation_prompt(query)}
+            ]
+        )
+        
+        sql_query = message.content[0].text.strip()
+        
+        # SQL 쿼리 정제
+        if sql_query.startswith("```sql"):
+            sql_query = sql_query[6:]
+        if sql_query.startswith("```"):
+            sql_query = sql_query[3:]
+        if sql_query.endswith("```"):
+            sql_query = sql_query[:-3]
+        sql_query = sql_query.strip()
+        
+        logging.info(f"📝 생성된 SQL: {sql_query}")
+        
+        # SQL 쿼리를 수정하여 qpoll_join_cb와 LEFT JOIN 추가
+        # welcome_cb_scored의 패널id(소문자)와 qpoll_join_cb의 패널id를 조인
+        if sql_query.upper().startswith('SELECT * FROM WELCOME_CB_SCORED'):
+            # WHERE 절이 있는지 확인
+            if ' WHERE ' in sql_query.upper():
+                parts = sql_query.split(' WHERE ', 1)
+                base_query = parts[0]
+                where_clause = parts[1]
 
+                # where_clause 내 패널id를 테이블별칭 w."패널id"로 치환
+                where_clause = re.sub(r'\b패널id\b', 'w."패널id"', where_clause, flags=re.IGNORECASE)
 
-# 파이썬 파일을 직접 실행했을 때만 아래 코드가 작동하게 하는 조건문
-# (다른 파일에서 import될 때는 실행되지 않게 함)
+                # qpoll_join_cb 테이블에서 모든 칼럼을 가져오도록 q.* 사용
+                modified_query = f"""
+                SELECT w.*, q.* 
+                FROM welcome_cb_scored w 
+                LEFT JOIN qpoll_join_cb q ON LOWER(w."패널id") = LOWER(q."패널id")
+                WHERE {where_clause}
+                """
+
+            else:
+                # WHERE 절이 없는 경우 (LIMIT만 있을 수 있음)
+                if ' LIMIT ' in sql_query.upper():
+                    parts = sql_query.split(' LIMIT ', 1)
+                    limit_clause = parts[1]
+                    modified_query = f"""
+                    SELECT w.*, q.* 
+                    FROM welcome_cb_scored w 
+                    LEFT JOIN qpoll_join_cb q ON LOWER(w."패널id") = LOWER(q."패널id")
+                    LIMIT {limit_clause}
+                    """
+                else:
+                    modified_query = """
+                    SELECT w.*, q.* 
+                    FROM welcome_cb_scored w 
+                    LEFT JOIN qpoll_join_cb q ON LOWER(w."패널id") = LOWER(q."패널id")
+                    """
+            sql_query = modified_query
+            logging.info(f"🔗 JOIN 추가된 SQL: {sql_query}")
+        
+        # DB 조회 실행
+        conn = psycopg2.connect(**DB_CONFIG)
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(sql_query)
+        results = cur.fetchall()
+        cur.close()
+        conn.close()
+        
+        if not results:
+            logging.info("❌ 검색 결과 없음")
+            return jsonify({
+                "panels": [],
+                "words": []
+            })
+        
+        logging.info(f"✅ DB 조회 완료: {len(results)}개 패널")
+        
+        # 결과 변환 및 신뢰도 계산
+        panels = []
+        for idx, row in enumerate(results, start=1):  # 1부터 시작하는 인덱스
+            panel_dict = dict(row)
+            
+            # 신뢰도 계산 (새로운 로직 사용)
+            score, hit_rules, hit_messages = calculate_reliability_score(panel_dict)
+            
+            # 나이 계산
+            birth_year = panel_dict.get('출생년도')
+            age = None
+            if birth_year:
+                try:
+                    age = 2025 - int(birth_year)
+                except:
+                    age = None
+            
+            # NULL 값을 '무응답'으로 변환하는 헬퍼 함수
+            def convert_null(value, default='무응답'):
+                if value is None or value == '' or value == '-' or value == 'null':
+                    return default
+                return value
+            # --- 여기에 사용자 요청으로 추가한 qpoll_join_cb 칼럼들(생활패턴 관련)을 동일한 형식으로 panel에 넣음 ---
+            lifestyle_fields = [
+                    "체력_관리를_위한_활동",
+                    "이용_중인_OTT_서비스",
+                    "전통시장_방문_빈도",
+                    "선호하는_설_선물_유형",
+                    "초등학생_시절_겨울방학_때_기억에_남는_일",
+                    "반려동물을_키우거나_키웠던_경험",
+                    "이사할_때_스트레스_받는_부분",
+                    "본인을_위해_소비하는_것_중_기분_좋아지는_소비",
+                    "요즘_많이_사용하는_앱",
+                    "스트레스를_많이_느끼는_상황",
+                    "스트레스를_해소하는_방법",
+                    "본인_피부_상태에_대한_만족도",
+                    "한_달_기준으로_스킨케어_제품에_소비하는_정도",
+                    "스킨케어_제품을_구매할_때_중요하게_고려하는_요소",
+                    "사용해_본_AI_챗봇_서비스",
+                    "사용해_본_AI_챗봇_서비스_중_주로_사용하는_것",
+                    "AI_챗봇_서비스를_활용한_용도나_앞으로의_활용_여부",
+                    "두_서비스_중_더_호감이_가는_서비스",
+                    "해외여행을_간다면_가고싶은_곳",
+                    "빠른_배송(당일·새벽·직진_배송)_서비스를_어떤_제품을_구매할_때_이용하는지",
+                    "여름철_가장_걱정되는_점",
+                    "버리기_아까운_물건이_있을_때_어떻게_하는지",
+                    "아침에_기상하기_위해_알람을_설정해두는_방식",
+                    "외부_식당에서_혼자_식사하는_빈도",
+                    "가장_중요하다고_생각하는_행복한_노년의_조건",
+                    "여름철_땀_때문에_겪는_불편함",
+                    "가장_효과_있었던_다이어트_방법",
+                    "야식을_먹는_방법",
+                    "여름철_최애_간식",
+                    "최근_지출을_많이_한_곳",
+                    "AI_서비스를_활용하는_분야",
+                    "본인이_미니멀리스트와_맥시멀리스트_중_어느_쪽에_가까운지",
+                    "여행_갈_때의_스타일",
+                    "일회용_비닐봉투_사용을_줄이기_위한_노력",
+                    "할인,_캐시백,_멤버십_등_포인트_적립_혜택을_신경_쓰는_정도",
+                    "초콜릿을_먹는_때",
+                    "개인정보_보호를_위한_습관",
+                    "절대_포기할_수_없는_여름_패션_필수템",
+                    "갑작스런_비가_오는데_우산이_없는_경우_취하는_행동",
+                    "휴대폰_갤러리에_가장_많이_저장되어_있는_사진",
+                    "여름철_물놀이_장소로_선호하는_곳"
+
+                    ]
+
+            lifestyle_dict = {}
+            for f in lifestyle_fields:
+                # 쿼리에서 온 칼럼명이 정확히 동일하다고 가정
+                lifestyle_dict[f] = convert_null(panel_dict.get(f))
+
+            # 프론트엔드 형식으로 변환
+            panel = {
+                "id": f"패널{idx}",  # 패널1, 패널2, 패널3...
+                "mbSn": panel_dict.get('패널id', f"MB{idx}"),  # 원본 MB_SN
+                "reliability": score,
+                "reliabilityReasons": hit_messages,
+                "age": age,
+                "gender": convert_null(panel_dict.get('성별')),
+                "occupation": convert_null(panel_dict.get('직업')),
+                "residence": convert_null(panel_dict.get('지역')),
+                "district": convert_null(panel_dict.get('지역구')),
+                "maritalStatus": convert_null(panel_dict.get('결혼여부')),
+                "education": convert_null(panel_dict.get('최종학력')),
+                "job": convert_null(panel_dict.get('직업')),
+                "role": convert_null(panel_dict.get('직무')),
+                "personalIncome": convert_null(panel_dict.get('월평균_개인소득')),
+                "householdIncome": convert_null(panel_dict.get('월평균_가구소득')),
+                "children": panel_dict.get('자녀수') if panel_dict.get('자녀수') is not None else 0,
+                "familySize": convert_null(panel_dict.get('가족수')),
+                "phoneModel": convert_null(panel_dict.get('휴대폰_모델')),
+                "phoneBrand": convert_null(panel_dict.get('휴대폰_브랜드')),
+                "carOwnership": convert_null(panel_dict.get('차량여부'), '없음'),
+                "carBrand": convert_null(panel_dict.get('자동차_제조사')),
+                "carModel": convert_null(panel_dict.get('자동차_모델')),
+                "smokingExperience": panel_dict.get('흡연경험') or [],
+                "drinkingExperience": panel_dict.get('음용경험_술') or [],
+                "ownedProducts": panel_dict.get('보유전제품') or [],
+                "lifestylePatterns": lifestyle_dict,  # 생활패턴 딕셔너리
+                "birthYear": birth_year,
+                "_text_description": panel_to_text(panel_dict),  # 텍스트화된 설명
+            }
+            panels.append(panel)
+        
+        # 신뢰도 높은 순으로 정렬
+        panels.sort(key=lambda x: x['reliability'], reverse=True)
+        
+        # 검색어에서 키워드 추출
+        words = []
+        keywords = query.split()
+        for keyword in keywords:
+            if len(keyword) > 1:
+                words.append({"text": keyword, "value": 10})
+        
+        logging.info(f"🎉 검색 완료: {len(panels)}개 패널 (평균 신뢰도: {sum(p['reliability'] for p in panels) / len(panels):.1f}%)")
+        
+        return jsonify({
+            "panels": panels,
+            "words": words
+        })
+        
+    except Exception as e:
+        logging.error(f"💥 검색 오류: {str(e)}")
+        traceback.print_exc()
+        return jsonify({
+            "error": "검색 중 오류가 발생했습니다.",
+            "detail": str(e)
+        }), 500
+
+# KURE-v1 임베딩 모델 로드
+kure_model = SentenceTransformer('nlpai-lab/KURE-v1')
+
+# 키워드 후보군 예시 (DB 연동 혹은 기타 실시간 생성 가능)
+KEYWORD_POOL = [
+    '20대 여성', '서울 거주', '직장인', '월소득 300만원', '미혼', '대졸', 'IT업계',
+    '베이비붐 세대', '프리랜서', '운동 좋아함', '30대 남성', '부동산 투자', '경기도',
+    '여행', '육아', '부모'
+]
+
+@app.route('/api/related_keywords', methods=['POST'])
+def related_keywords():
+    data = request.get_json()
+    user_query = data.get('query', '').strip()
+    top_n = int(data.get('top_n', 7))
+    if not user_query:
+        return jsonify({'keywords': []})
+    # 후보 키워드 임베딩
+    cand_emb = kure_model.encode(KEYWORD_POOL, convert_to_tensor=True)
+    # 쿼리 임베딩
+    q_emb = kure_model.encode(user_query, convert_to_tensor=True)
+    # 코사인 유사도
+    sims = util.pytorch_cos_sim(q_emb, cand_emb).cpu().numpy().flatten()
+    indices = sims.argsort()[::-1][:top_n]
+    related = [
+        {'text': KEYWORD_POOL[i], 'similarity': float(sims[i])} for i in indices
+    ]
+    return jsonify({'keywords': related})        
+
+@app.route('/api/export-csv', methods=['POST'])
+def export_csv():
+    """패널 데이터를 CSV로 내보내기"""
+    try:
+        import csv
+        from io import StringIO, BytesIO
+        from flask import make_response
+        
+        data = request.get_json()
+        panels = data.get('panels', [])
+        
+        if not panels:
+            return jsonify({"error": "내보낼 패널 데이터가 없습니다."}), 400
+        
+        # CSV 생성 (StringIO 사용)
+        output = StringIO()
+        
+        # CSV 헤더 정의
+        headers = [
+            'MB_SN', '패널번호', '신뢰도', '감점사유',
+            '성별', '나이', '출생년도', '거주지', '지역구',
+            '결혼여부', '자녀수', '가족수', '최종학력', '직업', '직무',
+            '월평균_개인소득', '월평균_가구소득',
+            '휴대폰_브랜드', '휴대폰_모델',
+            '차량여부', '자동차_제조사', '자동차_모델',
+            '흡연경험', '음주경험', '보유제품'
+        ]
+        
+        # CSV Writer 생성 (Excel 호환성을 위한 설정)
+        writer = csv.DictWriter(
+            output, 
+            fieldnames=headers,
+            quoting=csv.QUOTE_ALL,  # 모든 필드를 따옴표로 감싸기
+            lineterminator='\n'  # 줄바꿈 문자 명시
+        )
+        writer.writeheader()
+        
+        # 패널 데이터 작성
+        for panel in panels:
+            # 리스트를 문자열로 변환하는 함수
+            def format_list(value):
+                if value is None:
+                    return '-'
+                if isinstance(value, list):
+                    if len(value) == 0:
+                        return '-'
+                    return ' / '.join(str(v) for v in value)
+                return str(value) if value else '-'
+            
+            writer.writerow({
+                'MB_SN': panel.get('mbSn', '-'),
+                '패널번호': panel.get('id', '-'),
+                '신뢰도': f"{panel.get('reliability', 0)}%",
+                '감점사유': ' / '.join(panel.get('reliabilityReasons', [])) if panel.get('reliabilityReasons') else '-',
+                '성별': panel.get('gender', '-'),
+                '나이': panel.get('age', '-'),
+                '출생년도': panel.get('birthYear', '-'),
+                '거주지': panel.get('residence', '-'),
+                '지역구': panel.get('district', '-'),
+                '결혼여부': panel.get('maritalStatus', '-'),
+                '자녀수': panel.get('children', 0),
+                '가족수': panel.get('familySize', '-'),
+                '최종학력': panel.get('education', '-'),
+                '직업': panel.get('job', '-'),
+                '직무': panel.get('role', '-'),
+                '월평균_개인소득': panel.get('personalIncome', '-'),
+                '월평균_가구소득': panel.get('householdIncome', '-'),
+                '휴대폰_브랜드': panel.get('phoneBrand', '-'),
+                '휴대폰_모델': panel.get('phoneModel', '-'),
+                '차량여부': panel.get('carOwnership', '-'),
+                '자동차_제조사': panel.get('carBrand', '-'),
+                '자동차_모델': panel.get('carModel', '-'),
+                '흡연경험': format_list(panel.get('smokingExperience')),
+                '음주경험': format_list(panel.get('drinkingExperience')),
+                '보유제품': format_list(panel.get('ownedProducts')),
+            })
+        
+        # CSV 데이터를 가져오기
+        csv_content = output.getvalue()
+        output.close()
+        
+        # UTF-8 BOM 추가하여 Excel에서 한글이 제대로 표시되도록 함
+        csv_bytes = '\ufeff' + csv_content  # BOM 추가
+        
+        # 응답 생성
+        response = make_response(csv_bytes.encode('utf-8'))
+        response.headers['Content-Type'] = 'text/csv; charset=utf-8'
+        response.headers['Content-Disposition'] = 'attachment; filename*=UTF-8\'\'%ED%8C%A8%EB%84%90%EB%8D%B0%EC%9D%B4%ED%84%B0.csv'
+        
+        logging.info(f"✅ CSV 내보내기 완료: {len(panels)}개 패널")
+        
+        return response
+        
+    except Exception as e:
+        logging.error(f"💥 CSV 내보내기 오류: {str(e)}")
+        traceback.print_exc()
+        return jsonify({
+            "error": "CSV 내보내기 중 오류가 발생했습니다.",
+            "detail": str(e)
+        }), 500
+
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)  # 개발모드, 기본포트 5000
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s [%(levelname)s] %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    app.run(host='0.0.0.0', port=5000, debug=True)
