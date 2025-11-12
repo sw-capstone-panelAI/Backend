@@ -7,6 +7,10 @@ import json
 import logging
 import traceback
 import re
+from sentence_transformers import SentenceTransformer, util
+import numpy as np
+
+
 
 app = Flask(__name__)
 CORS(app)
@@ -44,8 +48,9 @@ INCOME_RANK = {
 }
 
 RULE_MESSAGES = {
-    "required_gender_missing": "필수항목(성별) 누락 - 응답 데이터가 부족하여 점수를 부여할 수 없습니다. 신뢰할 수 없는 패널데이터입니다.",
-    "required_birth_year_missing": "필수항목(출생년도) 누락 - 응답 데이터가 부족하여 점수를 부여할 수 없습니다. 신뢰할 수 없는 패널데이터입니다.",
+    "required_birth_year_missing": "필수정보 누락 : 나이",
+    "required_occupation_missing": "필수정보 누락 : 직업",
+    "required_income_missing": "필수정보 누락 : 개인소득",
     "age_married_under18": "18세 미만인데 결혼 상태",
     "age_child_under18": "18세 미만인데 자녀 있음",
     "age_college_under18": "18세 미만인데 대학 재학/졸업 이상",
@@ -307,12 +312,15 @@ def preprocess_panel(row):
 def get_reliability_rules():
     """신뢰도 검증 규칙 리스트 반환"""
     return [
-        # 필수 항목 체크 (최우선)
-        ("required_gender_missing",
-         lambda r: not r.get("성별") or r.get("성별") in ["", "-", None, "무응답"]),
-        
+        # 필수 항목 체크 (각 26점 감점)
         ("required_birth_year_missing",
          lambda r: not r.get("출생년도") or r.get("출생년도") in ["", "-", None, "무응답"]),
+        
+        ("required_occupation_missing",
+         lambda r: not r.get("직업") or r.get("직업") in ["", "-", None, "무응답"]),
+        
+        ("required_income_missing",
+         lambda r: not r.get("월평균_개인소득") or r.get("월평균_개인소득") in ["", "-", None, "무응답"]),
         
         # 연령 기반
         ("age_married_under18",
@@ -389,7 +397,7 @@ def get_reliability_rules():
              )) and (r["_직업"] == "중/고등학생")
          )),
 
-        # 차량 불일치/누락 규칙 (car_have_Y_but_missing_brand_or_model 삭제)
+        # 차량 불일치/누락 규칙
         ("car_brand_but_no_model",
          lambda r: bool(_norm_text_none(r.get("_제조사"))) and not _norm_text_none(r.get("_차모델"))),
 
@@ -410,13 +418,15 @@ def calculate_reliability_score(row):
     hit_rules = [k for k, v in detail.items() if v]
     hit_messages = [RULE_MESSAGES.get(k, k) for k in hit_rules]
 
-    # 필수 항목 누락 시 즉시 0점 및 감점 사유 명확히 추가
-    if "required_gender_missing" in hit_rules or "required_birth_year_missing" in hit_rules:
-        # 감점 사유 교체
-        hit_messages = ["응답 데이터가 부족하여 점수를 부여할 수 없습니다. 신뢰할 수 없는 패널데이터입니다."]
-        return 0, hit_rules, hit_messages
-
-    score = max(0, 100 - 5 * len(hit_rules))
+    # 필수정보 누락에 대한 감점 처리 (각 26점씩)
+    required_missing_count = sum(1 for rule in ["required_birth_year_missing", "required_occupation_missing", "required_income_missing"] if rule in hit_rules)
+    
+    # 다른 규칙에 대한 감점 (각 5점씩)
+    other_rules = [rule for rule in hit_rules if rule not in ["required_birth_year_missing", "required_occupation_missing", "required_income_missing"]]
+    
+    score = 100 - (26 * required_missing_count) - (5 * len(other_rules))
+    score = max(0, score)
+    
     return score, hit_rules, hit_messages
 
 
@@ -554,6 +564,13 @@ def create_sql_generation_prompt(user_query: str) -> str:
 12. NULL 값 처리:
     - NULL 값은 백엔드에서 '무응답'으로 자동 변환됨
     - WHERE 조건에서 NULL 체크: 컬럼명 IS NOT NULL
+13. 고소득자 기준 (매우 중요!):
+    - "고소득자", "고소득", "높은 소득" 등의 키워드가 있을 때:
+    - 반드시 월평균_개인소득만 사용 (월평균_가구소득은 사용 금지!)
+    - 개인소득 400만원 이상 = 고소득자
+    - 조건: 월평균_개인소득 IN ('월 400~499만원', '월 500~599만원', '월 600~699만원', '월 700~799만원', '월 800~899만원', '월 900~999만원', '월 1000만원 이상')
+    - ✅ 올바른 예: WHERE 월평균_개인소득 IN ('월 400~499만원', '월 500~599만원', '월 600~699만원', '월 700~799만원', '월 800~899만원', '월 900~999만원', '월 1000만원 이상')
+    - ❌ 틀린 예: WHERE 월평균_가구소득 ... (가구소득 사용 금지)
 
 좋은 예시:
 - "서울 30대 남성 자녀 2명 이상"
@@ -562,10 +579,17 @@ def create_sql_generation_prompt(user_query: str) -> str:
 - "서울 30대 남성 50명"
   → SELECT * FROM welcome_cb_scored WHERE 지역 = '서울' AND 성별 = '남성' AND 출생년도::INTEGER BETWEEN 1985 AND 1994 LIMIT 50
 
+- "서울 고소득자 남성"
+  → SELECT * FROM welcome_cb_scored WHERE 지역 = '서울' AND 성별 = '남성' AND 월평균_개인소득 IN ('월 400~499만원', '월 500~599만원', '월 600~699만원', '월 700~799만원', '월 800~899만원', '월 900~999만원', '월 1000만원 이상')
+
+- "20대 고소득자"
+  → SELECT * FROM welcome_cb_scored WHERE 출생년도::INTEGER BETWEEN 1995 AND 2005 AND 월평균_개인소득 IN ('월 400~499만원', '월 500~599만원', '월 600~699만원', '월 700~799만원', '월 800~899만원', '월 900~999만원', '월 1000만원 이상')
+
 나쁜 예시 (절대 이렇게 하지 마세요):
 - 출생년도 BETWEEN... (❌ 캐스팅 없음)
 - 패널ID (❌ 대문자 ID)
 - 인원수가 명시되었는데 LIMIT 없음 (❌)
+- 고소득자 조건에서 월평균_가구소득 사용 (❌ 반드시 월평균_개인소득만 사용!)
 
 지금 SQL 쿼리를 생성하세요 (순수 SQL만):"""
 
@@ -605,6 +629,45 @@ def search():
         sql_query = sql_query.strip()
         
         logging.info(f"📝 생성된 SQL: {sql_query}")
+        
+        # SQL 쿼리를 수정하여 qpoll_test와 LEFT JOIN 추가
+        # welcome_cb_scored의 패널id(소문자)와 qpoll_test의 패널id를 조인
+        if sql_query.upper().startswith('SELECT * FROM WELCOME_CB_SCORED'):
+            # WHERE 절이 있는지 확인
+            if ' WHERE ' in sql_query.upper():
+                parts = sql_query.split(' WHERE ', 1)
+                base_query = parts[0]
+                where_clause = parts[1]
+
+            # where_clause 내 패널id를 테이블별칭 w."패널id"로 치환
+                where_clause = re.sub(r'\b패널id\b', 'w."패널id"', where_clause, flags=re.IGNORECASE)
+
+                modified_query = f"""
+                SELECT w.*, q."체력_관리를_위한_활동" as 체력_관리를_위한_활동
+                FROM welcome_cb_scored w 
+                LEFT JOIN qpoll_test q ON LOWER(w."패널id") = LOWER(q."패널id")
+                WHERE {where_clause}
+                """
+
+            else:
+                # WHERE 절이 없는 경우 (LIMIT만 있을 수 있음)
+                if ' LIMIT ' in sql_query.upper():
+                    parts = sql_query.split(' LIMIT ', 1)
+                    limit_clause = parts[1]
+                    modified_query = f"""
+                    SELECT w.*, q."체력_관리를_위한_활동" as 체력_관리를_위한_활동
+                    FROM welcome_cb_scored w 
+                    LEFT JOIN qpoll_test q ON LOWER(w."패널id") = LOWER(q."패널id")
+                    LIMIT {limit_clause}
+                    """
+                else:
+                    modified_query = """
+                    SELECT w.*, q."체력_관리를_위한_활동" as 체력_관리를_위한_활동
+                    FROM welcome_cb_scored w 
+                    LEFT JOIN qpoll_test q ON LOWER(w."패널id") = LOWER(q."패널id")
+                    """
+            sql_query = modified_query
+            logging.info(f"🔗 JOIN 추가된 SQL: {sql_query}")
         
         # DB 조회 실행
         conn = psycopg2.connect(**DB_CONFIG)
@@ -673,6 +736,7 @@ def search():
                 "smokingExperience": panel_dict.get('흡연경험') or [],
                 "drinkingExperience": panel_dict.get('음용경험_술') or [],
                 "ownedProducts": panel_dict.get('보유전제품') or [],
+                "physicalActivity": convert_null(panel_dict.get('체력_관리를_위한_활동')),  # 체력관리활동 추가
                 "birthYear": birth_year,
                 "_text_description": panel_to_text(panel_dict),  # 텍스트화된 설명
             }
@@ -703,12 +767,41 @@ def search():
             "detail": str(e)
         }), 500
 
+# KURE-v1 임베딩 모델 로드
+kure_model = SentenceTransformer('nlpai-lab/KURE-v1')
+
+# 키워드 후보군 예시 (DB 연동 혹은 기타 실시간 생성 가능)
+KEYWORD_POOL = [
+    '20대 여성', '서울 거주', '직장인', '월소득 300만원', '미혼', '대졸', 'IT업계',
+    '베이비붐 세대', '프리랜서', '운동 좋아함', '30대 남성', '부동산 투자', '경기도',
+    '여행', '육아', '부모'
+]
+
+@app.route('/api/related_keywords', methods=['POST'])
+def related_keywords():
+    data = request.get_json()
+    user_query = data.get('query', '').strip()
+    top_n = int(data.get('top_n', 7))
+    if not user_query:
+        return jsonify({'keywords': []})
+    # 후보 키워드 임베딩
+    cand_emb = kure_model.encode(KEYWORD_POOL, convert_to_tensor=True)
+    # 쿼리 임베딩
+    q_emb = kure_model.encode(user_query, convert_to_tensor=True)
+    # 코사인 유사도
+    sims = util.pytorch_cos_sim(q_emb, cand_emb).cpu().numpy().flatten()
+    indices = sims.argsort()[::-1][:top_n]
+    related = [
+        {'text': KEYWORD_POOL[i], 'similarity': float(sims[i])} for i in indices
+    ]
+    return jsonify({'keywords': related})        
+
 @app.route('/api/export-csv', methods=['POST'])
 def export_csv():
     """패널 데이터를 CSV로 내보내기"""
     try:
         import csv
-        from io import StringIO
+        from io import StringIO, BytesIO
         from flask import make_response
         
         data = request.get_json()
@@ -717,7 +810,7 @@ def export_csv():
         if not panels:
             return jsonify({"error": "내보낼 패널 데이터가 없습니다."}), 400
         
-        # CSV 생성
+        # CSV 생성 (StringIO 사용)
         output = StringIO()
         
         # CSV 헤더 정의
@@ -731,16 +824,32 @@ def export_csv():
             '흡연경험', '음주경험', '보유제품'
         ]
         
-        writer = csv.DictWriter(output, fieldnames=headers)
+        # CSV Writer 생성 (Excel 호환성을 위한 설정)
+        writer = csv.DictWriter(
+            output, 
+            fieldnames=headers,
+            quoting=csv.QUOTE_ALL,  # 모든 필드를 따옴표로 감싸기
+            lineterminator='\n'  # 줄바꿈 문자 명시
+        )
         writer.writeheader()
         
         # 패널 데이터 작성
         for panel in panels:
+            # 리스트를 문자열로 변환하는 함수
+            def format_list(value):
+                if value is None:
+                    return '-'
+                if isinstance(value, list):
+                    if len(value) == 0:
+                        return '-'
+                    return ' / '.join(str(v) for v in value)
+                return str(value) if value else '-'
+            
             writer.writerow({
                 'MB_SN': panel.get('mbSn', '-'),
                 '패널번호': panel.get('id', '-'),
                 '신뢰도': f"{panel.get('reliability', 0)}%",
-                '감점사유': ', '.join(panel.get('reliabilityReasons', [])) if panel.get('reliabilityReasons') else '-',
+                '감점사유': ' / '.join(panel.get('reliabilityReasons', [])) if panel.get('reliabilityReasons') else '-',
                 '성별': panel.get('gender', '-'),
                 '나이': panel.get('age', '-'),
                 '출생년도': panel.get('birthYear', '-'),
@@ -759,18 +868,22 @@ def export_csv():
                 '차량여부': panel.get('carOwnership', '-'),
                 '자동차_제조사': panel.get('carBrand', '-'),
                 '자동차_모델': panel.get('carModel', '-'),
-                '흡연경험': ', '.join(panel.get('smokingExperience', [])) if isinstance(panel.get('smokingExperience'), list) else '-',
-                '음주경험': ', '.join(panel.get('drinkingExperience', [])) if isinstance(panel.get('drinkingExperience'), list) else '-',
-                '보유제품': ', '.join(panel.get('ownedProducts', [])) if isinstance(panel.get('ownedProducts'), list) else '-',
+                '흡연경험': format_list(panel.get('smokingExperience')),
+                '음주경험': format_list(panel.get('drinkingExperience')),
+                '보유제품': format_list(panel.get('ownedProducts')),
             })
         
-        # CSV 응답 생성
-        csv_output = output.getvalue()
+        # CSV 데이터를 가져오기
+        csv_content = output.getvalue()
         output.close()
         
-        response = make_response(csv_output)
-        response.headers['Content-Type'] = 'text/csv; charset=utf-8-sig'  # UTF-8 BOM 추가 (엑셀 호환)
-        response.headers['Content-Disposition'] = 'attachment; filename=panel_data.csv'
+        # UTF-8 BOM 추가하여 Excel에서 한글이 제대로 표시되도록 함
+        csv_bytes = '\ufeff' + csv_content  # BOM 추가
+        
+        # 응답 생성
+        response = make_response(csv_bytes.encode('utf-8'))
+        response.headers['Content-Type'] = 'text/csv; charset=utf-8'
+        response.headers['Content-Disposition'] = 'attachment; filename*=UTF-8\'\'%ED%8C%A8%EB%84%90%EB%8D%B0%EC%9D%B4%ED%84%B0.csv'
         
         logging.info(f"✅ CSV 내보내기 완료: {len(panels)}개 패널")
         
