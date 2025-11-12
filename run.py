@@ -44,6 +44,8 @@ INCOME_RANK = {
 }
 
 RULE_MESSAGES = {
+    "required_gender_missing": "필수항목(성별) 누락 - 응답 데이터가 부족하여 점수를 부여할 수 없습니다. 신뢰할 수 없는 패널데이터입니다.",
+    "required_birth_year_missing": "필수항목(출생년도) 누락 - 응답 데이터가 부족하여 점수를 부여할 수 없습니다. 신뢰할 수 없는 패널데이터입니다.",
     "age_married_under18": "18세 미만인데 결혼 상태",
     "age_child_under18": "18세 미만인데 자녀 있음",
     "age_college_under18": "18세 미만인데 대학 재학/졸업 이상",
@@ -305,6 +307,13 @@ def preprocess_panel(row):
 def get_reliability_rules():
     """신뢰도 검증 규칙 리스트 반환"""
     return [
+        # 필수 항목 체크 (최우선)
+        ("required_gender_missing",
+         lambda r: not r.get("성별") or r.get("성별") in ["", "-", None, "무응답"]),
+        
+        ("required_birth_year_missing",
+         lambda r: not r.get("출생년도") or r.get("출생년도") in ["", "-", None, "무응답"]),
+        
         # 연령 기반
         ("age_married_under18",
          lambda r: _is_under(r.get("age"), 18) and (r["_결혼"] in ["기혼", "기타(사별/이혼 등)"])),
@@ -395,21 +404,21 @@ def get_reliability_rules():
     ]
 
 def calculate_reliability_score(row):
-    """
-    신뢰도 점수 계산 및 위반 규칙 반환
-    Returns: (score, hit_rules, hit_messages)
-    """
     rr = preprocess_panel(row)
     rules = get_reliability_rules()
-    
     detail = {name: bool(fn(rr)) for name, fn in rules}
     hit_rules = [k for k, v in detail.items() if v]
     hit_messages = [RULE_MESSAGES.get(k, k) for k in hit_rules]
-    
-    # 신뢰도 점수: 100점에서 위반 규칙당 5점씩 감점
+
+    # 필수 항목 누락 시 즉시 0점 및 감점 사유 명확히 추가
+    if "required_gender_missing" in hit_rules or "required_birth_year_missing" in hit_rules:
+        # 감점 사유 교체
+        hit_messages = ["응답 데이터가 부족하여 점수를 부여할 수 없습니다. 신뢰할 수 없는 패널데이터입니다."]
+        return 0, hit_rules, hit_messages
+
     score = max(0, 100 - 5 * len(hit_rules))
-    
     return score, hit_rules, hit_messages
+
 
 # ============================================================
 # 패널 텍스트화
@@ -506,7 +515,7 @@ def create_sql_generation_prompt(user_query: str) -> str:
 - 보유전제품 (JSONB)
 - 휴대폰_브랜드 (VARCHAR)
 - 휴대폰_모델 (VARCHAR)
-- 차량여부 (VARCHAR) - 예: '있음', '없음'
+- 차량여부 (VARCHAR) - 예: '있다', '없다'
 - 자동차_제조사 (VARCHAR)
 - 자동차_모델 (VARCHAR)
 - 흡연경험 (JSONB)
@@ -640,6 +649,7 @@ def search():
             # 프론트엔드 형식으로 변환
             panel = {
                 "id": f"패널{idx}",  # 패널1, 패널2, 패널3...
+                "mbSn": panel_dict.get('패널id', f"MB{idx}"),  # 원본 MB_SN
                 "reliability": score,
                 "reliabilityReasons": hit_messages,
                 "age": age,
@@ -690,6 +700,87 @@ def search():
         traceback.print_exc()
         return jsonify({
             "error": "검색 중 오류가 발생했습니다.",
+            "detail": str(e)
+        }), 500
+
+@app.route('/api/export-csv', methods=['POST'])
+def export_csv():
+    """패널 데이터를 CSV로 내보내기"""
+    try:
+        import csv
+        from io import StringIO
+        from flask import make_response
+        
+        data = request.get_json()
+        panels = data.get('panels', [])
+        
+        if not panels:
+            return jsonify({"error": "내보낼 패널 데이터가 없습니다."}), 400
+        
+        # CSV 생성
+        output = StringIO()
+        
+        # CSV 헤더 정의
+        headers = [
+            'MB_SN', '패널번호', '신뢰도', '감점사유',
+            '성별', '나이', '출생년도', '거주지', '지역구',
+            '결혼여부', '자녀수', '가족수', '최종학력', '직업', '직무',
+            '월평균_개인소득', '월평균_가구소득',
+            '휴대폰_브랜드', '휴대폰_모델',
+            '차량여부', '자동차_제조사', '자동차_모델',
+            '흡연경험', '음주경험', '보유제품'
+        ]
+        
+        writer = csv.DictWriter(output, fieldnames=headers)
+        writer.writeheader()
+        
+        # 패널 데이터 작성
+        for panel in panels:
+            writer.writerow({
+                'MB_SN': panel.get('mbSn', '-'),
+                '패널번호': panel.get('id', '-'),
+                '신뢰도': f"{panel.get('reliability', 0)}%",
+                '감점사유': ', '.join(panel.get('reliabilityReasons', [])) if panel.get('reliabilityReasons') else '-',
+                '성별': panel.get('gender', '-'),
+                '나이': panel.get('age', '-'),
+                '출생년도': panel.get('birthYear', '-'),
+                '거주지': panel.get('residence', '-'),
+                '지역구': panel.get('district', '-'),
+                '결혼여부': panel.get('maritalStatus', '-'),
+                '자녀수': panel.get('children', 0),
+                '가족수': panel.get('familySize', '-'),
+                '최종학력': panel.get('education', '-'),
+                '직업': panel.get('job', '-'),
+                '직무': panel.get('role', '-'),
+                '월평균_개인소득': panel.get('personalIncome', '-'),
+                '월평균_가구소득': panel.get('householdIncome', '-'),
+                '휴대폰_브랜드': panel.get('phoneBrand', '-'),
+                '휴대폰_모델': panel.get('phoneModel', '-'),
+                '차량여부': panel.get('carOwnership', '-'),
+                '자동차_제조사': panel.get('carBrand', '-'),
+                '자동차_모델': panel.get('carModel', '-'),
+                '흡연경험': ', '.join(panel.get('smokingExperience', [])) if isinstance(panel.get('smokingExperience'), list) else '-',
+                '음주경험': ', '.join(panel.get('drinkingExperience', [])) if isinstance(panel.get('drinkingExperience'), list) else '-',
+                '보유제품': ', '.join(panel.get('ownedProducts', [])) if isinstance(panel.get('ownedProducts'), list) else '-',
+            })
+        
+        # CSV 응답 생성
+        csv_output = output.getvalue()
+        output.close()
+        
+        response = make_response(csv_output)
+        response.headers['Content-Type'] = 'text/csv; charset=utf-8-sig'  # UTF-8 BOM 추가 (엑셀 호환)
+        response.headers['Content-Disposition'] = 'attachment; filename=panel_data.csv'
+        
+        logging.info(f"✅ CSV 내보내기 완료: {len(panels)}개 패널")
+        
+        return response
+        
+    except Exception as e:
+        logging.error(f"💥 CSV 내보내기 오류: {str(e)}")
+        traceback.print_exc()
+        return jsonify({
+            "error": "CSV 내보내기 중 오류가 발생했습니다.",
             "detail": str(e)
         }), 500
 
