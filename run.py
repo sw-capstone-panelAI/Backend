@@ -630,8 +630,8 @@ def search():
         
         logging.info(f"📝 생성된 SQL: {sql_query}")
         
-        # SQL 쿼리를 수정하여 qpoll_test와 LEFT JOIN 추가
-        # welcome_cb_scored의 패널id(소문자)와 qpoll_test의 패널id를 조인
+        # SQL 쿼리를 수정하여 qpoll_join_cb와 LEFT JOIN 추가
+        # welcome_cb_scored의 패널id(소문자)와 qpoll_join_cb의 패널id를 조인
         if sql_query.upper().startswith('SELECT * FROM WELCOME_CB_SCORED'):
             # WHERE 절이 있는지 확인
             if ' WHERE ' in sql_query.upper():
@@ -639,13 +639,15 @@ def search():
                 base_query = parts[0]
                 where_clause = parts[1]
 
-            # where_clause 내 패널id를 테이블별칭 w."패널id"로 치환
+                # where_clause 내 패널id를 테이블별칭 w."패널id"로 치환
                 where_clause = re.sub(r'\b패널id\b', 'w."패널id"', where_clause, flags=re.IGNORECASE)
 
+                # qpoll_join_cb 테이블에서 모든 칼럼을 가져오도록 q.* 사용
+                
                 modified_query = f"""
-                SELECT w.*, q."체력_관리를_위한_활동" as 체력_관리를_위한_활동
+                SELECT w.*, q.* 
                 FROM welcome_cb_scored w 
-                LEFT JOIN qpoll_test q ON LOWER(w."패널id") = LOWER(q."패널id")
+                LEFT JOIN qpoll_join_cb q ON LOWER(w."패널id") = LOWER(q."패널id")
                 WHERE {where_clause}
                 """
 
@@ -655,16 +657,16 @@ def search():
                     parts = sql_query.split(' LIMIT ', 1)
                     limit_clause = parts[1]
                     modified_query = f"""
-                    SELECT w.*, q."체력_관리를_위한_활동" as 체력_관리를_위한_활동
+                    SELECT w.*, q.* 
                     FROM welcome_cb_scored w 
-                    LEFT JOIN qpoll_test q ON LOWER(w."패널id") = LOWER(q."패널id")
+                    LEFT JOIN qpoll_join_cb q ON LOWER(w."패널id") = LOWER(q."패널id")
                     LIMIT {limit_clause}
                     """
                 else:
                     modified_query = """
-                    SELECT w.*, q."체력_관리를_위한_활동" as 체력_관리를_위한_활동
+                    SELECT w.*, q.* 
                     FROM welcome_cb_scored w 
-                    LEFT JOIN qpoll_test q ON LOWER(w."패널id") = LOWER(q."패널id")
+                    LEFT JOIN qpoll_join_cb q ON LOWER(w."패널id") = LOWER(q."패널id")
                     """
             sql_query = modified_query
             logging.info(f"🔗 JOIN 추가된 SQL: {sql_query}")
@@ -708,7 +710,57 @@ def search():
                 if value is None or value == '' or value == '-' or value == 'null':
                     return default
                 return value
-            
+            # --- 여기에 사용자 요청으로 추가한 qpoll_join_cb 칼럼들(생활패턴 관련)을 동일한 형식으로 panel에 넣음 ---
+            lifestyle_fields = [
+                    "체력_관리를_위한_활동",
+                    "이용_중인_OTT_서비스",
+                    "전통시장_방문_빈도",
+                    "선호하는_설_선물_유형",
+                    "초등학생_시절_겨울방학_때_기억에_남는_일",
+                    "반려동물을_키우거나_키웠던_경험",
+                    "이사할_때_스트레스_받는_부분",
+                    "본인을_위해_소비하는_것_중_기분_좋아지는_소비",
+                    "요즘_많이_사용하는_앱",
+                    "스트레스를_많이_느끼는_상황",
+                    "스트레스를_해소하는_방법",
+                    "본인_피부_상태에_대한_만족도",
+                    "한_달_기준으로_스킨케어_제품에_소비하는_정도",
+                    "스킨케어_제품을_구매할_때_중요하게_고려하는_요소",
+                    "사용해_본_AI_챗봇_서비스",
+                    "사용해_본_AI_챗봇_서비스_중_주로_사용하는_것",
+                    "AI_챗봇_서비스를_활용한_용도나_앞으로의_활용_여부",
+                    "두_서비스_중_더_호감이_가는_서비스",
+                    "해외여행을_간다면_가고싶은_곳",
+                    "빠른_배송(당일·새벽·직진_배송)_서비스를_어떤_제품을_구매할_때_이용하는지",
+                    "여름철_가장_걱정되는_점",
+                    "버리기_아까운_물건이_있을_때_어떻게_하는지",
+                    "아침에_기상하기_위해_알람을_설정해두는_방식",
+                    "외부_식당에서_혼자_식사하는_빈도",
+                    "가장_중요하다고_생각하는_행복한_노년의_조건",
+                    "여름철_땀_때문에_겪는_불편함",
+                    "가장_효과_있었던_다이어트_방법",
+                    "야식을_먹는_방법",
+                    "여름철_최애_간식",
+                    "최근_지출을_많이_한_곳",
+                    "AI_서비스를_활용하는_분야",
+                    "본인이_미니멀리스트와_맥시멀리스트_중_어느_쪽에_가까운지",
+                    "여행_갈_때의_스타일",
+                    "일회용_비닐봉투_사용을_줄이기_위한_노력",
+                    "할인,_캐시백,_멤버십_등_포인트_적립_혜택을_신경_쓰는_정도",
+                    "초콜릿을_먹는_때",
+                    "개인정보_보호를_위한_습관",
+                    "절대_포기할_수_없는_여름_패션_필수템",
+                    "갑작스런_비가_오는데_우산이_없는_경우_취하는_행동",
+                    "휴대폰_갤러리에_가장_많이_저장되어_있는_사진",
+                    "여름철_물놀이_장소로_선호하는_곳"
+
+                    ]
+
+            lifestyle_dict = {}
+            for f in lifestyle_fields:
+                # 쿼리에서 온 칼럼명이 정확히 동일하다고 가정
+                lifestyle_dict[f] = convert_null(panel_dict.get(f))
+
             # 프론트엔드 형식으로 변환
             panel = {
                 "id": f"패널{idx}",  # 패널1, 패널2, 패널3...
@@ -736,7 +788,7 @@ def search():
                 "smokingExperience": panel_dict.get('흡연경험') or [],
                 "drinkingExperience": panel_dict.get('음용경험_술') or [],
                 "ownedProducts": panel_dict.get('보유전제품') or [],
-                "physicalActivity": convert_null(panel_dict.get('체력_관리를_위한_활동')),  # 체력관리활동 추가
+                "lifestylePatterns": lifestyle_dict,  # 생활패턴 딕셔너리
                 "birthYear": birth_year,
                 "_text_description": panel_to_text(panel_dict),  # 텍스트화된 설명
             }
