@@ -9,6 +9,7 @@ import traceback
 import re
 from sentence_transformers import SentenceTransformer, util
 import numpy as np
+import torch
 
 
 
@@ -24,6 +25,11 @@ DB_CONFIG = {
 }
 
 client = Anthropic(api_key="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")
+
+# ============================================================
+# 임베딩 모델 로드
+# ============================================================
+kure_model = SentenceTransformer('nlpai-lab/KURE-v1')
 
 # ============================================================
 # 신뢰도 계산 관련 상수 및 유틸리티
@@ -74,6 +80,51 @@ RULE_MESSAGES = {
     "car_have_N_but_brand_or_model": "차량 보유 '없다'인데 브랜드/모델 기재",
     "car_brand_model_mismatch_heuristic": "차량 브랜드/모델 불일치(휴리스틱)",
 }
+
+# 생활패턴 칼럼 리스트
+LIFESTYLE_COLUMNS = [
+    "체력_관리를_위한_활동",
+    "이용_중인_OTT_서비스",
+    "전통시장_방문_빈도",
+    "선호하는_설_선물_유형",
+    "초등학생_시절_겨울방학_때_기억에_남는_일",
+    "반려동물을_키우거나_키웠던_경험",
+    "이사할_때_스트레스_받는_부분",
+    "본인을_위해_소비하는_것_중_기분_좋아지는_소비",
+    "요즘_많이_사용하는_앱",
+    "스트레스를_많이_느끼는_상황",
+    "스트레스를_해소하는_방법",
+    "본인_피부_상태에_대한_만족도",
+    "한_달_기준으로_스킨케어_제품에_소비하는_정도",
+    "스킨케어_제품을_구매할_때_중요하게_고려하는_요소",
+    "사용해_본_AI_챗봇_서비스",
+    "사용해_본_AI_챗봇_서비스_중_주로_사용하는_것",
+    "AI_챗봇_서비스를_활용한_용도나_앞으로의_활용_여부",
+    "두_서비스_중_더_호감이_가는_서비스",
+    "해외여행을_간다면_가고싶은_곳",
+    "빠른_배송(당일·새벽·직진_배송)_서비스를_어떤_제품을_구매할_때_이용하는지",
+    "여름철_가장_걱정되는_점",
+    "버리기_아까운_물건이_있을_때_어떻게_하는지",
+    "아침에_기상하기_위해_알람을_설정해두는_방식",
+    "외부_식당에서_혼자_식사하는_빈도",
+    "가장_중요하다고_생각하는_행복한_노년의_조건",
+    "여름철_땀_때문에_겪는_불편함",
+    "가장_효과_있었던_다이어트_방법",
+    "야식을_먹는_방법",
+    "여름철_최애_간식",
+    "최근_지출을_많이_한_곳",
+    "AI_서비스를_활용하는_분야",
+    "본인이_미니멀리스트와_맥시멀리스트_중_어느_쪽에_가까운지",
+    "여행_갈_때의_스타일",
+    "일회용_비닐봉투_사용을_줄이기_위한_노력",
+    "할인,_캐시백,_멤버십_등_포인트_적립_혜택을_신경_쓰는_정도",
+    "초콜릿을_먹는_때",
+    "개인정보_보호를_위한_습관",
+    "절대_포기할_수_없는_여름_패션_필수템",
+    "갑작스런_비가_오는데_우산이_없는_경우_취하는_행동",
+    "휴대폰_갤러리에_가장_많이_저장되어_있는_사진",
+    "여름철_물놀이_장소로_선호하는_곳"
+]
 
 # 차량 브랜드 정규화 매핑
 _CAR_BRAND_ALIASES = {
@@ -126,10 +177,8 @@ def norm_str(x):
     """문자열 정규화 (int/float 타입도 처리)"""
     if x is None:
         return ""
-    # int나 float인 경우 문자열로 변환
     if isinstance(x, (int, float)):
         return str(x)
-    # 문자열인 경우 strip
     s = str(x).strip()
     if all(ch in {',',';','/','-','·','.'} for ch in s):
         return ""
@@ -246,14 +295,14 @@ def preprocess_panel(row):
     """패널 데이터 전처리 및 메타데이터 생성"""
     r = dict(row)
 
-    # 나이 계산
+    # 나이 계산 (일반 나이)
     birth = _get(r, "출생년도")
     try:
         if isinstance(birth, int):
             birth_int = birth
         else:
             birth_int = int(str(birth).strip())
-        r["age"] = 2025 - birth_int
+        r["age"] = 2025 - birth_int - 1  # 만 나이
     except Exception:
         r["age"] = None
 
@@ -262,7 +311,7 @@ def preprocess_panel(row):
     fam_map = {"1명(혼자 거주)": 1, "2명": 2, "3명": 3, "4명": 4, "5명 이상": 5}
     r["_가족수_수치"] = fam_map.get(fam_text, None)
     
-    # 자녀수 안전 처리 (이미 int일 수 있음)
+    # 자녀수 안전 처리
     children = _get(r, "자녀수")
     if isinstance(children, int):
         r["_자녀수"] = children
@@ -312,7 +361,6 @@ def preprocess_panel(row):
 def get_reliability_rules():
     """신뢰도 검증 규칙 리스트 반환"""
     return [
-        # 필수 항목 체크 (각 26점 감점)
         ("required_birth_year_missing",
          lambda r: not r.get("출생년도") or r.get("출생년도") in ["", "-", None, "무응답"]),
         
@@ -322,7 +370,6 @@ def get_reliability_rules():
         ("required_income_missing",
          lambda r: not r.get("월평균_개인소득") or r.get("월평균_개인소득") in ["", "-", None, "무응답"]),
         
-        # 연령 기반
         ("age_married_under18",
          lambda r: _is_under(r.get("age"), 18) and (r["_결혼"] in ["기혼", "기타(사별/이혼 등)"])),
         
@@ -335,7 +382,6 @@ def get_reliability_rules():
         ("old_student_80plus",
          lambda r: _is_overeq(r.get("age"), 80) and (r["_직업"] in ["중/고등학생", "대학생/대학원생"])),
 
-        # 차량 (만 18세 미만으로 변경)
         ("age_car_under18_hascar",
          lambda r: _is_under(r.get("age"), 18) and (r["_차량보유"] == "있다")),
         
@@ -345,14 +391,12 @@ def get_reliability_rules():
         ("age_car_under18_model_filled",
          lambda r: _is_under(r.get("age"), 18) and bool(r["_차모델"])),
 
-        # 흡연/음주 (미성년)
         ("teen_smoker",
          lambda r: _is_under(r.get("age"), 19) and _any_smoke_selected(r["_흡연_set"])),
         
         ("teen_drink",
          lambda r: _is_under(r.get("age"), 19) and any(a for a in r["_주류_set"] if "최근 1년 이내 술을 마시지 않음" not in a)),
 
-        # 흡연경험 없음인데 관련 기입
         ("brand_without_smoke",
          lambda r: (len(r["_흡연_set"]) == 0 or not _any_smoke_selected(r["_흡연_set"])) and len(r["_담배브랜드_set"]) > 0),
         
@@ -365,16 +409,13 @@ def get_reliability_rules():
         ("alcohol_memo_without_drink",
          lambda r: (len(r["_주류_set"]) == 0 or all("최근 1년 이내 술을 마시지 않음" in a for a in r["_주류_set"])) and r["_술_ETC"]),
 
-        # 학력/직업
         ("lowedu_projob",
          lambda r: (r["_학력"] in ["고등학교 졸업 이하"]) and (r["_직업"] == "전문직 (의사, 간호사, 변호사, 회계사, 예술가, 종교인, 엔지니어, 프로그래머, 기술사 등)")),
 
-        # 소득(서열)
         ("personal_gt_household",
          lambda r: (r["_개인소득_랭크"] is not None and r["_가구소득_랭크"] is not None) and
                    (r["_개인소득_랭크"] > r["_가구소득_랭크"])),
 
-        # 휴대폰 브랜드/모델 불일치
         ("phone_brand_model_mismatch",
          lambda r: (lambda bg, mg: (
              False if (bg is None or mg is None or mg == "special")
@@ -385,7 +426,6 @@ def get_reliability_rules():
          ))(_brand_group_from_text(r["_폰브랜드"]),
             _model_group_from_text(r["_폰모델"]))),
 
-        # 선택 규칙
         ("old_student_flag",
          lambda r: (r.get("age") is not None) and (r["age"] >= 50) and (r["_직업"] == "대학생/대학원생")),
 
@@ -397,7 +437,6 @@ def get_reliability_rules():
              )) and (r["_직업"] == "중/고등학생")
          )),
 
-        # 차량 불일치/누락 규칙
         ("car_brand_but_no_model",
          lambda r: bool(_norm_text_none(r.get("_제조사"))) and not _norm_text_none(r.get("_차모델"))),
 
@@ -418,17 +457,13 @@ def calculate_reliability_score(row):
     hit_rules = [k for k, v in detail.items() if v]
     hit_messages = [RULE_MESSAGES.get(k, k) for k in hit_rules]
 
-    # 필수정보 누락에 대한 감점 처리 (각 26점씩)
     required_missing_count = sum(1 for rule in ["required_birth_year_missing", "required_occupation_missing", "required_income_missing"] if rule in hit_rules)
-    
-    # 다른 규칙에 대한 감점 (각 5점씩)
     other_rules = [rule for rule in hit_rules if rule not in ["required_birth_year_missing", "required_occupation_missing", "required_income_missing"]]
     
     score = 100 - (26 * required_missing_count) - (5 * len(other_rules))
     score = max(0, score)
     
     return score, hit_rules, hit_messages
-
 
 # ============================================================
 # 패널 텍스트화
@@ -438,7 +473,6 @@ def panel_to_text(r):
     """패널 데이터를 자연어 텍스트로 변환"""
     parts = []
     
-    # 1) 성별 + 연령
     gender = r.get("성별")
     if gender:
         parts.append(f"{gender}이다.")
@@ -446,11 +480,10 @@ def panel_to_text(r):
     birth = r.get("출생년도")
     age = r.get("age")
     if age:
-        parts.append(f"{birth}년생으로 {age}세이다.")
+        parts.append(f"{birth}년생으로 만 {age}세이다.")
     elif birth:
         parts.append(f"{birth}년생이다.")
     
-    # 2) 거주지역
     region1 = r.get("지역")
     region2 = r.get("지역구")
     if region1 and region2:
@@ -458,7 +491,6 @@ def panel_to_text(r):
     elif region1:
         parts.append(f"{region1} 거주자이다.")
     
-    # 3) 개인소득 / 가구소득
     personal = r.get("월평균_개인소득")
     household = r.get("월평균_가구소득")
     if personal:
@@ -466,7 +498,6 @@ def panel_to_text(r):
     if household:
         parts.append(f"월 가구소득은 {household} 수준이다.")
     
-    # 4) 직업 / 학력
     job = r.get("직업")
     edu = r.get("최종학력")
     if job:
@@ -474,7 +505,6 @@ def panel_to_text(r):
     if edu:
         parts.append(f"최종학력은 {edu}이다.")
     
-    # 5) 차량 / 휴대폰
     car = r.get("차량여부")
     if car:
         parts.append(f"차량 보유 여부는 {car}이다.")
@@ -486,7 +516,6 @@ def panel_to_text(r):
     elif phone_brand:
         parts.append(f"{phone_brand} 스마트폰을 사용하고 있다.")
     
-    # 6) 흡연 / 음주
     smokes = r.get("흡연경험") or []
     if smokes:
         smoke_str = ", ".join(smokes) if isinstance(smokes, list) else str(smokes)
@@ -500,16 +529,175 @@ def panel_to_text(r):
     return " ".join(parts)
 
 # ============================================================
+# 생활패턴 임베딩 기반 패널ID 추출
+# ============================================================
+
+def is_lifestyle_query(query: str) -> bool:
+    """쿼리가 생활패턴 관련인지 판단 (개선된 버전)"""
+    
+    # 기본 정보 키워드 (생활패턴이 아님)
+    basic_info_keywords = [
+        '성별', '나이', '남성', '여성', '연령', '세', '대',
+        '소득', '수입', '월급', '연봉', '만원',
+        '직업', '직장', '학생', '프리랜서', '자영업',
+        '거주', '지역', '서울', '부산', '경기', '인천', '대구', '광주', '대전', '울산',
+        '결혼', '미혼', '기혼', '자녀', '가족',
+        '학력', '고졸', '대졸', '대학', '석사', '박사',
+        '차량', '자동차', '차', '제조사', '모델',
+        '휴대폰', '핸드폰', '스마트폰', '아이폰', '갤럭시'
+    ]
+    
+    # 생활패턴 키워드들을 칼럼명에서 추출
+    lifestyle_keywords = set()
+    for col in LIFESTYLE_COLUMNS:
+        # 언더스코어로 분리된 각 단어를 키워드로 추가
+        words = col.split('_')
+        for word in words:
+            if len(word) > 1:  # 1글자는 제외
+                lifestyle_keywords.add(word)
+    
+    # 추가 생활패턴 키워드
+    additional_keywords = {
+        '취미', '습관', '선호', '좋아', '관심', '패턴', '라이프스타일', 
+        '일상', '생활', '활동', '경험', '방법', '스타일', '빈도'
+    }
+    lifestyle_keywords.update(additional_keywords)
+    
+    query_lower = query.lower()
+    
+    # 기본 정보만 있는 쿼리인지 확인
+    has_basic_only = any(keyword in query for keyword in basic_info_keywords)
+    has_lifestyle = any(keyword in query for keyword in lifestyle_keywords)
+    
+    # 생활패턴 키워드가 있고, 기본 정보만 있는게 아니면 True
+    if has_lifestyle and not (has_basic_only and not has_lifestyle):
+        return True
+    
+    # 또는 생활패턴 키워드만 있으면 True
+    if has_lifestyle and not has_basic_only:
+        return True
+    
+    return False
+
+def get_lifestyle_based_panel_ids(query: str, top_k: int = 100):
+    """생활패턴 임베딩 기반으로 패널 ID 리스트 추출 (개선된 버전)"""
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # 1. 먼저 DB에 실제 존재하는 생활패턴 칼럼 확인
+        cur.execute("""
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name = 'panel_cb_all'
+        """)
+        existing_columns = {row['column_name'] for row in cur.fetchall()}
+        
+        # 2. LIFESTYLE_COLUMNS 중 실제로 존재하는 칼럼만 필터링
+        valid_lifestyle_cols = [col for col in LIFESTYLE_COLUMNS if col in existing_columns]
+        
+        if not valid_lifestyle_cols:
+            logging.warning("⚠️ 생활패턴 칼럼이 DB에 존재하지 않습니다.")
+            cur.close()
+            conn.close()
+            return []
+        
+        logging.info(f"✅ 유효한 생활패턴 칼럼: {len(valid_lifestyle_cols)}개")
+        
+        # 3. 생활패턴 칼럼만 선택하여 쿼리
+        lifestyle_cols_quoted = ', '.join([f'"{col}"' for col in valid_lifestyle_cols])
+        query_sql = f'SELECT "패널id", {lifestyle_cols_quoted} FROM panel_cb_all'
+        
+        cur.execute(query_sql)
+        all_panels = cur.fetchall()
+        cur.close()
+        conn.close()
+        
+        if not all_panels:
+            logging.warning("⚠️ 패널 데이터가 없습니다.")
+            return []
+        
+        logging.info(f"🔍 생활패턴 임베딩 분석: 전체 {len(all_panels)}개 패널")
+        
+        # 4. 쿼리 임베딩
+        query_embedding = kure_model.encode(query, convert_to_tensor=True)
+        
+        # 5. 각 패널의 생활패턴 텍스트 생성 및 유사도 계산
+        panel_scores = []
+        valid_panel_count = 0
+        
+        for panel in all_panels:
+            lifestyle_texts = []
+            
+            # 유효한 생활패턴 칼럼에서만 데이터 추출
+            for col in valid_lifestyle_cols:
+                value = panel.get(col)
+                # NULL 값과 무의미한 값 제외
+                if value and value not in NULL_TOKENS and str(value).strip() and str(value) != 'None':
+                    lifestyle_texts.append(f"{col}: {str(value)}")
+            
+            # 생활패턴 데이터가 있는 패널만 분석
+            if lifestyle_texts:
+                valid_panel_count += 1
+                # 생활패턴 텍스트 결합
+                combined_text = " ".join(lifestyle_texts)
+                panel_embedding = kure_model.encode(combined_text, convert_to_tensor=True)
+                
+                # 코사인 유사도 계산
+                similarity = util.pytorch_cos_sim(query_embedding, panel_embedding).item()
+                panel_scores.append((panel.get('패널id'), similarity))
+        
+        logging.info(f"✅ 유효한 생활패턴 데이터를 가진 패널: {valid_panel_count}개")
+        
+        if not panel_scores:
+            logging.warning("⚠️ 생활패턴 데이터를 가진 패널이 없습니다.")
+            return []
+        
+        # 6. 유사도 순으로 정렬하여 상위 top_k개 패널 ID 반환
+        panel_scores.sort(key=lambda x: x[1], reverse=True)
+        
+        # 유사도 임계값 적용 (0.3 이상만 선택)
+        filtered_scores = [(pid, score) for pid, score in panel_scores if score >= 0.3]
+        
+        if not filtered_scores:
+            logging.warning("⚠️ 유사도 임계값(0.3) 이상인 패널이 없습니다.")
+            # 임계값 미만이어도 상위 결과는 반환
+            filtered_scores = panel_scores[:min(top_k, len(panel_scores))]
+        
+        top_panel_ids = [panel_id for panel_id, score in filtered_scores[:top_k]]
+        
+        # 상위 5개의 유사도 점수 로깅
+        top_5_scores = filtered_scores[:5]
+        logging.info(f"📊 상위 5개 패널 유사도: {[(pid, f'{score:.3f}') for pid, score in top_5_scores]}")
+        logging.info(f"✅ 생활패턴 기반 패널 ID 추출 완료: {len(top_panel_ids)}개")
+        
+        return top_panel_ids
+        
+    except Exception as e:
+        logging.error(f"💥 생활패턴 임베딩 분석 오류: {str(e)}")
+        traceback.print_exc()
+        return []
+
+# ============================================================
 # SQL 생성 프롬프트
 # ============================================================
 
-def create_sql_generation_prompt(user_query: str) -> str:
+def create_sql_generation_prompt(user_query: str, lifestyle_panel_ids: list = None) -> str:
+    """SQL 쿼리 생성 프롬프트 (생활패턴 기반 필터링 포함)"""
+    
+    # 생활패턴 기반 패널 ID가 있으면 IN 절 추가
+    lifestyle_filter = ""
+    if lifestyle_panel_ids and len(lifestyle_panel_ids) > 0:
+        # SQL Injection 방지를 위해 패널 ID를 이스케이프 처리
+        escaped_ids = [f"'{str(pid).replace(chr(39), chr(39)+chr(39))}'" for pid in lifestyle_panel_ids[:100]]
+        lifestyle_filter = f"\n⚠️ **중요: 생활패턴 기반 필터링 적용**\n이 쿼리는 생활패턴 분석을 통해 선별된 패널만 대상으로 합니다.\nWHERE 절에 반드시 다음 조건을 포함하세요:\n\"패널id\" IN ({', '.join(escaped_ids)})\n"
+    
     return f"""당신은 PostgreSQL SQL 쿼리 생성 전문가입니다.
 
-테이블 이름: welcome_cb_scored
+테이블 이름: panel_cb_all
 
 테이블 스키마 (정확한 컬럼명):
-- 패널id (VARCHAR, PRIMARY KEY) ⚠️ 소문자 'id' 주의!
+- 패널id (VARCHAR, PRIMARY KEY)
 - 성별 (VARCHAR) - 예: '남성', '여성'
 - 출생년도 (VARCHAR) ⚠️ 문자열이므로 숫자 비교시 반드시 ::INTEGER 캐스팅 필요!
 - 지역 (VARCHAR) - 예: '서울', '부산', '경기', '인천' 등
@@ -529,67 +717,25 @@ def create_sql_generation_prompt(user_query: str) -> str:
 - 자동차_제조사 (VARCHAR)
 - 자동차_모델 (VARCHAR)
 - 흡연경험 (JSONB)
-- 흡연경험_담배브랜드 (JSONB)
-- 흡연경험_담배브랜드_기타 (VARCHAR)
-- 전자담배_이용경험 (JSONB)
-- 흡연경험_담배_기타내용 (VARCHAR)
 - 음용경험_술 (JSONB)
-- 음용경험_술_기타내용 (VARCHAR)
-
+{lifestyle_filter}
 사용자 요청: "{user_query}"
 
-쿼리 생성 규칙 (매우 중요!):
-1. 기본 형식: SELECT * FROM welcome_cb_scored
-2. 컬럼명 정확히 사용: 패널id (대문자 ID 아님!)
-3. 출생년도로 나이 계산 시 반드시 ::INTEGER 캐스팅:
-   ✅ 올바른 예: 출생년도::INTEGER BETWEEN 1985 AND 1994
-   ❌ 틀린 예: 출생년도 BETWEEN 1985 AND 1994
-4. 나이대별 출생년도 (2025년 기준):
-   - 10대: 출생년도::INTEGER BETWEEN 2006 AND 2015
-   - 20대: 출생년도::INTEGER BETWEEN 1995 AND 2005
-   - 30대: 출생년도::INTEGER BETWEEN 1985 AND 1994
-   - 40대: 출생년도::INTEGER BETWEEN 1975 AND 1984
-   - 50대: 출생년도::INTEGER BETWEEN 1965 AND 1974
-   - 60대: 출생년도::INTEGER BETWEEN 1955 AND 1964
-5. 자녀수는 이미 INTEGER이므로: 자녀수 >= 2 (캐스팅 불필요)
-6. 가족수는 VARCHAR이므로: 가족수::INTEGER >= 4 (캐스팅 필요)
-7. JSONB 존재 확인: 흡연경험 IS NOT NULL
-8. 텍스트 검색: 휴대폰_브랜드 LIKE '%삼성%'
-9. 차량 소유: 차량여부 = '있음'
-10. 순수 SQL만 반환 (설명, 코드블록 없이)
-11. LIMIT 처리 규칙:
-    - 사용자가 인원수를 명시한 경우: LIMIT [인원수]를 반드시 추가
-    - 인원수 표현: "10명", "50명", "100명", "10개", "50개", "100개 패널" 등
-    - 사용자가 인원수를 명시하지 않은 경우: LIMIT 없이 전체 결과 반환
-12. NULL 값 처리:
-    - NULL 값은 백엔드에서 '무응답'으로 자동 변환됨
-    - WHERE 조건에서 NULL 체크: 컬럼명 IS NOT NULL
-13. 고소득자 기준 (매우 중요!):
-    - "고소득자", "고소득", "높은 소득" 등의 키워드가 있을 때:
-    - 반드시 월평균_개인소득만 사용 (월평균_가구소득은 사용 금지!)
-    - 개인소득 400만원 이상 = 고소득자
-    - 조건: 월평균_개인소득 IN ('월 400~499만원', '월 500~599만원', '월 600~699만원', '월 700~799만원', '월 800~899만원', '월 900~999만원', '월 1000만원 이상')
-    - ✅ 올바른 예: WHERE 월평균_개인소득 IN ('월 400~499만원', '월 500~599만원', '월 600~699만원', '월 700~799만원', '월 800~899만원', '월 900~999만원', '월 1000만원 이상')
-    - ❌ 틀린 예: WHERE 월평균_가구소득 ... (가구소득 사용 금지)
-
-좋은 예시:
-- "서울 30대 남성 자녀 2명 이상"
-  → SELECT * FROM welcome_cb_scored WHERE 지역 = '서울' AND 성별 = '남성' AND 출생년도::INTEGER BETWEEN 1985 AND 1994 AND 자녀수 >= 2
-
-- "서울 30대 남성 50명"
-  → SELECT * FROM welcome_cb_scored WHERE 지역 = '서울' AND 성별 = '남성' AND 출생년도::INTEGER BETWEEN 1985 AND 1994 LIMIT 50
-
-- "서울 고소득자 남성"
-  → SELECT * FROM welcome_cb_scored WHERE 지역 = '서울' AND 성별 = '남성' AND 월평균_개인소득 IN ('월 400~499만원', '월 500~599만원', '월 600~699만원', '월 700~799만원', '월 800~899만원', '월 900~999만원', '월 1000만원 이상')
-
-- "20대 고소득자"
-  → SELECT * FROM welcome_cb_scored WHERE 출생년도::INTEGER BETWEEN 1995 AND 2005 AND 월평균_개인소득 IN ('월 400~499만원', '월 500~599만원', '월 600~699만원', '월 700~799만원', '월 800~899만원', '월 900~999만원', '월 1000만원 이상')
-
-나쁜 예시 (절대 이렇게 하지 마세요):
-- 출생년도 BETWEEN... (❌ 캐스팅 없음)
-- 패널ID (❌ 대문자 ID)
-- 인원수가 명시되었는데 LIMIT 없음 (❌)
-- 고소득자 조건에서 월평균_가구소득 사용 (❌ 반드시 월평균_개인소득만 사용!)
+쿼리 생성 규칙:
+1. 기본 형식: SELECT * FROM panel_cb_all
+2. 출생년도로 나이 계산 시 반드시 ::INTEGER 캐스팅
+3. 나이대별 출생년도 (2025년 기준, 만 나이):
+   - 10대 (만 10~19세): 출생년도::INTEGER BETWEEN 2005 AND 2014
+   - 20대 (만 20~29세): 출생년도::INTEGER BETWEEN 1995 AND 2004
+   - 30대 (만 30~39세): 출생년도::INTEGER BETWEEN 1985 AND 1994
+   - 40대 (만 40~49세): 출생년도::INTEGER BETWEEN 1975 AND 1984
+   - 50대 (만 50~59세): 출생년도::INTEGER BETWEEN 1965 AND 1974
+   - 60대 (만 60~69세): 출생년도::INTEGER BETWEEN 1955 AND 1964
+4. 인원수 명시시 LIMIT 추가
+5. 고소득자는 월평균_개인소득 400만원 이상
+6. **생활패턴 필터가 있으면 WHERE 절에 \"패널id\" IN (...) 조건을 반드시 최우선으로 포함**
+7. 여러 조건이 있을 때는 AND로 연결
+8. 생활패턴 관련 칼럼은 직접 WHERE 조건에 사용하지 마세요 (이미 IN 절로 필터링됨)
 
 지금 SQL 쿼리를 생성하세요 (순수 SQL만):"""
 
@@ -608,12 +754,33 @@ def search():
 
         logging.info(f"🔍 검색 쿼리: {query}")
 
-        # Claude API로 SQL 쿼리 생성
+        # 생활패턴 관련 쿼리인지 확인 후 패널 ID 추출
+        # 생활패턴 관련 쿼리인지 확인 후 패널 ID 추출
+        lifestyle_panel_ids = None
+        is_lifestyle = is_lifestyle_query(query)
+        
+        logging.info(f"🎯 생활패턴 쿼리 판정: {is_lifestyle}")
+        
+        if is_lifestyle:
+            logging.info("🎯 생활패턴 임베딩 분석 시작")
+            lifestyle_panel_ids = get_lifestyle_based_panel_ids(query, top_k=200)  # 더 많은 후보 추출
+            
+            if not lifestyle_panel_ids or len(lifestyle_panel_ids) == 0:
+                logging.warning("❌ 생활패턴 기반 검색 결과 없음")
+                return jsonify({
+                    "panels": [],
+                    "words": [],
+                    "message": "생활패턴 데이터와 일치하는 패널을 찾을 수 없습니다."
+                })
+            
+            logging.info(f"✅ 생활패턴 기반 패널 {len(lifestyle_panel_ids)}개 추출 완료")
+
+        # Claude API로 SQL 쿼리 생성 (생활패턴 패널 ID 포함)
         message = client.messages.create(
             model="claude-sonnet-4-20250514",
-            max_tokens=1024,
+            max_tokens=2048,
             messages=[
-                {"role": "user", "content": create_sql_generation_prompt(query)}
+                {"role": "user", "content": create_sql_generation_prompt(query, lifestyle_panel_ids)}
             ]
         )
         
@@ -630,45 +797,6 @@ def search():
         
         logging.info(f"📝 생성된 SQL: {sql_query}")
         
-        # SQL 쿼리를 수정하여 qpoll_test와 LEFT JOIN 추가
-        # welcome_cb_scored의 패널id(소문자)와 qpoll_test의 패널id를 조인
-        if sql_query.upper().startswith('SELECT * FROM WELCOME_CB_SCORED'):
-            # WHERE 절이 있는지 확인
-            if ' WHERE ' in sql_query.upper():
-                parts = sql_query.split(' WHERE ', 1)
-                base_query = parts[0]
-                where_clause = parts[1]
-
-            # where_clause 내 패널id를 테이블별칭 w."패널id"로 치환
-                where_clause = re.sub(r'\b패널id\b', 'w."패널id"', where_clause, flags=re.IGNORECASE)
-
-                modified_query = f"""
-                SELECT w.*, q."체력_관리를_위한_활동" as 체력_관리를_위한_활동
-                FROM welcome_cb_scored w 
-                LEFT JOIN qpoll_test q ON LOWER(w."패널id") = LOWER(q."패널id")
-                WHERE {where_clause}
-                """
-
-            else:
-                # WHERE 절이 없는 경우 (LIMIT만 있을 수 있음)
-                if ' LIMIT ' in sql_query.upper():
-                    parts = sql_query.split(' LIMIT ', 1)
-                    limit_clause = parts[1]
-                    modified_query = f"""
-                    SELECT w.*, q."체력_관리를_위한_활동" as 체력_관리를_위한_활동
-                    FROM welcome_cb_scored w 
-                    LEFT JOIN qpoll_test q ON LOWER(w."패널id") = LOWER(q."패널id")
-                    LIMIT {limit_clause}
-                    """
-                else:
-                    modified_query = """
-                    SELECT w.*, q."체력_관리를_위한_활동" as 체력_관리를_위한_활동
-                    FROM welcome_cb_scored w 
-                    LEFT JOIN qpoll_test q ON LOWER(w."패널id") = LOWER(q."패널id")
-                    """
-            sql_query = modified_query
-            logging.info(f"🔗 JOIN 추가된 SQL: {sql_query}")
-        
         # DB 조회 실행
         conn = psycopg2.connect(**DB_CONFIG)
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -681,38 +809,39 @@ def search():
             logging.info("❌ 검색 결과 없음")
             return jsonify({
                 "panels": [],
-                "words": []
+                "words": [],
+                "message": "검색 조건에 맞는 패널을 찾을 수 없습니다."
             })
         
         logging.info(f"✅ DB 조회 완료: {len(results)}개 패널")
         
-        # 결과 변환 및 신뢰도 계산
+        # 결과 변환
         panels = []
-        for idx, row in enumerate(results, start=1):  # 1부터 시작하는 인덱스
+        for idx, row in enumerate(results, start=1):
             panel_dict = dict(row)
             
-            # 신뢰도 계산 (새로운 로직 사용)
             score, hit_rules, hit_messages = calculate_reliability_score(panel_dict)
             
-            # 나이 계산
             birth_year = panel_dict.get('출생년도')
             age = None
             if birth_year:
                 try:
-                    age = 2025 - int(birth_year)
+                    age = 2025 - int(birth_year) -1
                 except:
                     age = None
             
-            # NULL 값을 '무응답'으로 변환하는 헬퍼 함수
             def convert_null(value, default='무응답'):
                 if value is None or value == '' or value == '-' or value == 'null':
                     return default
                 return value
             
-            # 프론트엔드 형식으로 변환
+            lifestyle_dict = {}
+            for f in LIFESTYLE_COLUMNS:
+                lifestyle_dict[f] = convert_null(panel_dict.get(f))
+
             panel = {
-                "id": f"패널{idx}",  # 패널1, 패널2, 패널3...
-                "mbSn": panel_dict.get('패널id', f"MB{idx}"),  # 원본 MB_SN
+                "id": f"패널{idx}",
+                "mbSn": convert_null(panel_dict.get('패널id'), f"MB{idx}"),
                 "reliability": score,
                 "reliabilityReasons": hit_messages,
                 "age": age,
@@ -736,27 +865,26 @@ def search():
                 "smokingExperience": panel_dict.get('흡연경험') or [],
                 "drinkingExperience": panel_dict.get('음용경험_술') or [],
                 "ownedProducts": panel_dict.get('보유전제품') or [],
-                "physicalActivity": convert_null(panel_dict.get('체력_관리를_위한_활동')),  # 체력관리활동 추가
+                "lifestylePatterns": lifestyle_dict,
                 "birthYear": birth_year,
-                "_text_description": panel_to_text(panel_dict),  # 텍스트화된 설명
+                "_text_description": panel_to_text(panel_dict),
             }
             panels.append(panel)
         
-        # 신뢰도 높은 순으로 정렬
         panels.sort(key=lambda x: x['reliability'], reverse=True)
         
-        # 검색어에서 키워드 추출
         words = []
         keywords = query.split()
         for keyword in keywords:
             if len(keyword) > 1:
                 words.append({"text": keyword, "value": 10})
         
-        logging.info(f"🎉 검색 완료: {len(panels)}개 패널 (평균 신뢰도: {sum(p['reliability'] for p in panels) / len(panels):.1f}%)")
+        logging.info(f"🎉 검색 완료: {len(panels)}개 패널 (생활패턴 필터: {is_lifestyle})")
         
         return jsonify({
             "panels": panels,
-            "words": words
+            "words": words,
+            "isLifestyleQuery": is_lifestyle
         })
         
     except Exception as e:
@@ -767,10 +895,116 @@ def search():
             "detail": str(e)
         }), 500
 
-# KURE-v1 임베딩 모델 로드
-kure_model = SentenceTransformer('nlpai-lab/KURE-v1')
+@app.route('/api/common-characteristics', methods=['POST'])
+def common_characteristics():
+    """패널들의 공통 특성 분석"""
+    try:
+        data = request.get_json()
+        panels = data.get('panels', [])
+        
+        if not panels or len(panels) == 0:
+            return jsonify({"error": "분석할 패널 데이터가 없습니다."}), 400
+        
+        logging.info(f"🔍 공통 특성 분석: {len(panels)}개 패널")
+        
+        keyword_counter = {}
+        
+        for panel in panels:
+            gender = panel.get('gender')
+            if gender and gender != '무응답':
+                keyword_counter[gender] = keyword_counter.get(gender, 0) + 1
+            
+            residence = panel.get('residence')
+            if residence and residence != '무응답':
+                keyword_counter[residence] = keyword_counter.get(residence, 0) + 1
+            
+            job = panel.get('job')
+            if job and job != '무응답':
+                keyword_counter[job] = keyword_counter.get(job, 0) + 1
+            
+            age = panel.get('age')
+            if age:
+                if age < 20:
+                    age_group = '10대'
+                elif age < 30:
+                    age_group = '20대'
+                elif age < 40:
+                    age_group = '30대'
+                elif age < 50:
+                    age_group = '40대'
+                elif age < 60:
+                    age_group = '50대'
+                else:
+                    age_group = '60대 이상'
+                keyword_counter[age_group] = keyword_counter.get(age_group, 0) + 1
+            
+            income = panel.get('personalIncome')
+            if income and income != '무응답':
+                keyword_counter[income] = keyword_counter.get(income, 0) + 1
+        
+        top_keywords = sorted(
+            keyword_counter.items(), 
+            key=lambda x: x[1], 
+            reverse=True
+        )[:5]
+        
+        keywords = [
+            {"keyword": k, "count": v} 
+            for k, v in top_keywords
+        ]
+        
+        total_count = len(panels)
+        avg_age = sum(p.get('age', 0) for p in panels) / total_count if total_count > 0 else 0
+        
+        gender_dist = {}
+        for p in panels:
+            g = p.get('gender', '무응답')
+            gender_dist[g] = gender_dist.get(g, 0) + 1
+        
+        residence_dist = {}
+        for p in panels:
+            r = p.get('residence', '무응답')
+            if r != '무응답':
+                residence_dist[r] = residence_dist.get(r, 0) + 1
+        
+        summary_prompt = f"""다음은 {total_count}명의 패널 데이터 분석 결과입니다:
 
-# 키워드 후보군 예시 (DB 연동 혹은 기타 실시간 생성 가능)
+공통 특성 상위 5개:
+{chr(10).join([f'- {k["keyword"]}: {k["count"]}명' for k in keywords])}
+
+평균 나이: {avg_age:.1f}세
+성별 분포: {', '.join([f'{k} {v}명' for k, v in gender_dist.items()])}
+주요 거주지: {', '.join([f'{k} {v}명' for k, v in sorted(residence_dist.items(), key=lambda x: x[1], reverse=True)[:3]])}
+
+이 패널 집단의 특징을 2-3문장으로 자연스럽게 요약해주세요. 
+마케팅이나 타겟팅 관점에서 유용한 인사이트를 포함해주세요."""
+
+        message = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=512,
+            messages=[
+                {"role": "user", "content": summary_prompt}
+            ]
+        )
+        
+        summary = message.content[0].text.strip()
+        
+        logging.info(f"✅ 공통 특성 분석 완료: {len(keywords)}개 키워드")
+        
+        return jsonify({
+            "keywords": keywords,
+            "summary": summary
+        })
+        
+    except Exception as e:
+        logging.error(f"💥 공통 특성 분석 오류: {str(e)}")
+        traceback.print_exc()
+        return jsonify({
+            "error": "공통 특성 분석 중 오류가 발생했습니다.",
+            "detail": str(e)
+        }), 500
+
+# 키워드 후보군
 KEYWORD_POOL = [
     '20대 여성', '서울 거주', '직장인', '월소득 300만원', '미혼', '대졸', 'IT업계',
     '베이비붐 세대', '프리랜서', '운동 좋아함', '30대 남성', '부동산 투자', '경기도',
@@ -784,24 +1018,22 @@ def related_keywords():
     top_n = int(data.get('top_n', 7))
     if not user_query:
         return jsonify({'keywords': []})
-    # 후보 키워드 임베딩
+    
     cand_emb = kure_model.encode(KEYWORD_POOL, convert_to_tensor=True)
-    # 쿼리 임베딩
     q_emb = kure_model.encode(user_query, convert_to_tensor=True)
-    # 코사인 유사도
     sims = util.pytorch_cos_sim(q_emb, cand_emb).cpu().numpy().flatten()
     indices = sims.argsort()[::-1][:top_n]
     related = [
         {'text': KEYWORD_POOL[i], 'similarity': float(sims[i])} for i in indices
     ]
-    return jsonify({'keywords': related})        
+    return jsonify({'keywords': related})
 
 @app.route('/api/export-csv', methods=['POST'])
 def export_csv():
     """패널 데이터를 CSV로 내보내기"""
     try:
         import csv
-        from io import StringIO, BytesIO
+        from io import StringIO
         from flask import make_response
         
         data = request.get_json()
@@ -810,10 +1042,8 @@ def export_csv():
         if not panels:
             return jsonify({"error": "내보낼 패널 데이터가 없습니다."}), 400
         
-        # CSV 생성 (StringIO 사용)
         output = StringIO()
         
-        # CSV 헤더 정의
         headers = [
             'MB_SN', '패널번호', '신뢰도', '감점사유',
             '성별', '나이', '출생년도', '거주지', '지역구',
@@ -824,18 +1054,15 @@ def export_csv():
             '흡연경험', '음주경험', '보유제품'
         ]
         
-        # CSV Writer 생성 (Excel 호환성을 위한 설정)
         writer = csv.DictWriter(
             output, 
             fieldnames=headers,
-            quoting=csv.QUOTE_ALL,  # 모든 필드를 따옴표로 감싸기
-            lineterminator='\n'  # 줄바꿈 문자 명시
+            quoting=csv.QUOTE_ALL,
+            lineterminator='\n'
         )
         writer.writeheader()
         
-        # 패널 데이터 작성
         for panel in panels:
-            # 리스트를 문자열로 변환하는 함수
             def format_list(value):
                 if value is None:
                     return '-'
@@ -851,7 +1078,7 @@ def export_csv():
                 '신뢰도': f"{panel.get('reliability', 0)}%",
                 '감점사유': ' / '.join(panel.get('reliabilityReasons', [])) if panel.get('reliabilityReasons') else '-',
                 '성별': panel.get('gender', '-'),
-                '나이': panel.get('age', '-'),
+                '나이': f"만 {panel.get('age', '-')}세" if panel.get('age') else '-',
                 '출생년도': panel.get('birthYear', '-'),
                 '거주지': panel.get('residence', '-'),
                 '지역구': panel.get('district', '-'),
@@ -873,14 +1100,11 @@ def export_csv():
                 '보유제품': format_list(panel.get('ownedProducts')),
             })
         
-        # CSV 데이터를 가져오기
         csv_content = output.getvalue()
         output.close()
         
-        # UTF-8 BOM 추가하여 Excel에서 한글이 제대로 표시되도록 함
-        csv_bytes = '\ufeff' + csv_content  # BOM 추가
+        csv_bytes = '\ufeff' + csv_content
         
-        # 응답 생성
         response = make_response(csv_bytes.encode('utf-8'))
         response.headers['Content-Type'] = 'text/csv; charset=utf-8'
         response.headers['Content-Disposition'] = 'attachment; filename*=UTF-8\'\'%ED%8C%A8%EB%84%90%EB%8D%B0%EC%9D%B4%ED%84%B0.csv'
