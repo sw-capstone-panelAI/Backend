@@ -16,6 +16,8 @@ import torch
 app = Flask(__name__)
 CORS(app)
 
+
+
 DB_CONFIG = {
     "host": "rds-postgresql-pgvector.cbq4y662mptt.ap-northeast-2.rds.amazonaws.com",
     "user": "root",
@@ -30,6 +32,11 @@ client = Anthropic(api_key="sk-ant-api03-zUxNlpJAl95ZbA7-BLdUoO9pWft0R4NK7m8gmF7
 # 임베딩 모델 로드
 # ============================================================
 kure_model = SentenceTransformer('nlpai-lab/KURE-v1')
+
+
+
+
+
 
 # ============================================================
 # 신뢰도 계산 관련 상수 및 유틸리티
@@ -287,6 +294,11 @@ def _get(row, key, default=None):
     """안전한 딕셔너리 접근"""
     return row.get(key, default)
 
+
+
+
+
+
 # ============================================================
 # 패널 데이터 전처리
 # ============================================================
@@ -353,6 +365,11 @@ def preprocess_panel(row):
     r["_차모델"] = _norm_text_none(_get(r, "자동차_모델"))
 
     return r
+
+
+
+
+
 
 # ============================================================
 # 신뢰도 규칙 정의
@@ -465,6 +482,11 @@ def calculate_reliability_score(row):
     
     return score, hit_rules, hit_messages
 
+
+
+
+
+
 # ============================================================
 # 패널 텍스트화
 # ============================================================
@@ -528,136 +550,83 @@ def panel_to_text(r):
     
     return " ".join(parts)
 
-# ============================================================
-# 생활패턴 임베딩 기반 패널ID 추출
-# ============================================================
 
-def is_lifestyle_query(query: str) -> bool:
-    """쿼리가 생활패턴 관련인지 판단"""
-    lifestyle_keywords = [
-        '운동', '체력', 'OTT', '넷플릭스', '디즈니', '전통시장', '시장', '설선물', '선물',
-        '방학', '겨울방학', '추억', '반려동물', '강아지', '고양이', '애완동물', '이사', '스트레스',
-        '소비', '쇼핑', '앱', '어플', '피부', '스킨케어', '화장품', 'AI', '챗봇', '여행',
-        '해외여행', '배송', '당일배송', '여름', '더위', '물건', '알람', '혼밥', '노년', '땀',
-        '다이어트', '야식', '간식', '지출', '미니멀', '맥시멀', '비닐봉투', '환경', '할인',
-        '포인트', '멤버십', '초콜릿', '개인정보', '패션', '우산', '갤러리', '사진', '물놀이'
-    ]
-    return any(keyword in query for keyword in lifestyle_keywords)
 
-def get_lifestyle_based_panel_ids(query: str, top_k: int = 100):
-    """생활패턴 임베딩 기반으로 패널 ID 리스트 추출"""
-    try:
-        # 1. 전체 패널 데이터 가져오기
-        conn = psycopg2.connect(**DB_CONFIG)
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        
-        # 생활패턴 칼럼만 선택하여 쿼리
-        lifestyle_cols_quoted = ', '.join([f'"{col}"' for col in LIFESTYLE_COLUMNS])
-        query_sql = f'SELECT "패널id", {lifestyle_cols_quoted} FROM panel_cb_all'
-        
-        cur.execute(query_sql)
-        all_panels = cur.fetchall()
-        cur.close()
-        conn.close()
-        
-        if not all_panels:
-            return []
-        
-        logging.info(f"🔍 생활패턴 임베딩 분석: 전체 {len(all_panels)}개 패널")
-        
-        # 2. 쿼리 임베딩
-        query_embedding = kure_model.encode(query, convert_to_tensor=True)
-        
-        # 3. 각 패널의 생활패턴 텍스트 생성 및 유사도 계산
-        panel_scores = []
-        for panel in all_panels:
-            lifestyle_texts = []
-            for col in LIFESTYLE_COLUMNS:
-                value = panel.get(col)
-                if value and value not in NULL_TOKENS and str(value).strip():
-                    lifestyle_texts.append(str(value))
-            
-            if lifestyle_texts:
-                # 생활패턴 텍스트 결합
-                combined_text = " ".join(lifestyle_texts)
-                panel_embedding = kure_model.encode(combined_text, convert_to_tensor=True)
-                
-                # 코사인 유사도 계산
-                similarity = util.pytorch_cos_sim(query_embedding, panel_embedding).item()
-                panel_scores.append((panel.get('패널id'), similarity))
-        
-        # 4. 유사도 순으로 정렬하여 상위 top_k개 패널 ID 반환
-        panel_scores.sort(key=lambda x: x[1], reverse=True)
-        top_panel_ids = [panel_id for panel_id, score in panel_scores[:top_k]]
-        
-        logging.info(f"✅ 생활패턴 기반 패널 ID 추출 완료: {len(top_panel_ids)}개")
-        
-        return top_panel_ids
-        
-    except Exception as e:
-        logging.error(f"💥 생활패턴 임베딩 분석 오류: {str(e)}")
-        traceback.print_exc()
-        return []
+
+
+
+
+
 
 # ============================================================
 # SQL 생성 프롬프트
 # ============================================================
 
-def create_sql_generation_prompt(user_query: str, lifestyle_panel_ids: list = None) -> str:
+def create_sql_generation_prompt(user_query: str) -> str:
     """SQL 쿼리 생성 프롬프트 (생활패턴 기반 필터링 포함)"""
     
-    # 생활패턴 기반 패널 ID가 있으면 IN 절 추가
-    lifestyle_filter = ""
-    if lifestyle_panel_ids:
-        # SQL Injection 방지를 위해 패널 ID를 이스케이프 처리
-        escaped_ids = [f"'{pid}'" for pid in lifestyle_panel_ids[:100]]  # 상위 100개만
-        lifestyle_filter = f"\n⚠️ 중요: 생활패턴 기반 필터링이 적용됩니다. WHERE 절에 반드시 다음 조건을 추가하세요:\n\"패널id\" IN ({', '.join(escaped_ids)})\n"
-    
-    return f"""당신은 PostgreSQL SQL 쿼리 생성 전문가입니다.
+    # 테이블 스키마 설명서
+    with open("./tabel_schema_info.json", "r", encoding="utf-8") as f:
+        jsonFile = json.load(f)
 
-테이블 이름: panel_cb_all
+    return f"""너는 자연어 쿼리가 들어왔을 때 그것을 SQL쿼리문으로 바꿔주는 데이터베이스 전문가이다.
+            제공되는 테이블 스키마 가이드 json파일을 참고하여 사용자가 입력한 자연어 쿼리에 적합한 SQL 쿼리문을 만들어라.
+            결과를 출력할때 쿼리 생성 규칙에 맞게 출력한다.
 
-테이블 스키마 (정확한 컬럼명):
-- 패널id (VARCHAR, PRIMARY KEY)
-- 성별 (VARCHAR) - 예: '남성', '여성'
-- 출생년도 (VARCHAR) ⚠️ 문자열이므로 숫자 비교시 반드시 ::INTEGER 캐스팅 필요!
-- 지역 (VARCHAR) - 예: '서울', '부산', '경기', '인천' 등
-- 지역구 (VARCHAR)
-- 결혼여부 (VARCHAR) - 예: '기혼', '미혼'
-- 자녀수 (INTEGER) - 이미 숫자형이므로 캐스팅 불필요
-- 가족수 (VARCHAR) - 숫자 비교시 ::INTEGER 캐스팅 필요
-- 최종학력 (VARCHAR)
-- 직업 (VARCHAR)
-- 직무 (VARCHAR)
-- 월평균_개인소득 (VARCHAR)
-- 월평균_가구소득 (VARCHAR)
-- 보유전제품 (JSONB)
-- 휴대폰_브랜드 (VARCHAR)
-- 휴대폰_모델 (VARCHAR)
-- 차량여부 (VARCHAR) - 예: '있다', '없다'
-- 자동차_제조사 (VARCHAR)
-- 자동차_모델 (VARCHAR)
-- 흡연경험 (JSONB)
-- 음용경험_술 (JSONB)
-{lifestyle_filter}
-사용자 요청: "{user_query}"
+            [Tabel JSON]
+            {jsonFile}
 
-쿼리 생성 규칙:
-1. 기본 형식: SELECT * FROM panel_cb_all
-2. 출생년도로 나이 계산 시 반드시 ::INTEGER 캐스팅
-3. 나이대별 출생년도 (2025년 기준, 만 나이):
-   - 10대 (만 10~19세): 출생년도::INTEGER BETWEEN 2005 AND 2014
-   - 20대 (만 20~29세): 출생년도::INTEGER BETWEEN 1995 AND 2004
-   - 30대 (만 30~39세): 출생년도::INTEGER BETWEEN 1985 AND 1994
-   - 40대 (만 40~49세): 출생년도::INTEGER BETWEEN 1975 AND 1984
-   - 50대 (만 50~59세): 출생년도::INTEGER BETWEEN 1965 AND 1974
-   - 60대 (만 60~69세): 출생년도::INTEGER BETWEEN 1955 AND 1964
-4. 인원수 명시시 LIMIT 추가
-5. 고소득자는 월평균_개인소득 400만원 이상
-6. 생활패턴 필터가 있으면 WHERE 절에 \"패널id\" IN (...) 조건을 반드시 포함
-7. 여러 조건이 있을 때는 AND로 연결
+            [Query]
+            {user_query}
 
-지금 SQL 쿼리를 생성하세요 (순수 SQL만):"""
+            [SQL쿼리 생성 예시]
+            입력 자연어 쿼리: 서울 거주하는 남성 중 여름철 땀냄새를 신경쓰는 사람
+            LLM 생성 쿼리문: 
+            SELECT *
+            FROM panel_cb_all_label
+            WHERE "지역" = '서울'
+            AND "성별" = '남성'
+            AND (
+                    "여름철_가장_걱정되는_점" = '더위와 땀'
+                    OR "여름철_땀_때문에_겪는_불편함" = '땀 냄새가 걱정된다'
+                );
+            
+            입력 자연어 쿼리: 운동 좋아하고 술 좋아하는 30대
+            LLM 생성 쿼리문:
+            SELECT *
+            FROM panel_cb_all_label
+            WHERE "출생년도" BETWEEN '1985' AND '1994'
+            AND "체력_관리를_위한_활동"::text NOT LIKE '%체력관리를 위해 하고 있는 활동이 없다%'
+            AND "음용경험_술"::text NOT LIKE '%최근 1년 이내 술을 마시지 않음%';
+
+            [쿼리 생성 규칙]
+            1. 기본 형식: SELECT * FROM panel_cb_all_label
+            2. 나이대별 출생년도 (2025년 기준, 만 나이):
+            - 10대 (만 10~19세): 출생년도 2005 ~ 2014
+            - 20대 (만 20~29세): 출생년도 1995 ~ 2004
+            - 30대 (만 30~39세): 출생년도 1985 ~ 1994
+            - 40대 (만 40~49세): 출생년도 1975 ~ 1984
+            - 50대 (만 50~59세): 출생년도 1965 ~ 1974
+            - 60대 (만 60~69세): 출생년도 1955 ~ 1964
+            3. 인원수 명시시 LIMIT 추가
+            4. 고소득자는 월평균_개인소득 400만원 이상
+            5. SQL문 생성시 모든 컬럼명에는 ""를 붙여준다.
+            6. JSONB 타입 컬럼 처리 규칙 (매우 중요):
+            - 다음 컬럼들은 JSONB 타입이므로 반드시 ::text로 캐스팅 후 비교해야 한다:
+              음용경험_술, 흡연경험, 흡연경험_담배브랜드, 전자담배_이용경험, 보유전제품
+            - JSONB 컬럼에 LIKE 사용 시: "컬럼명"::text LIKE '%값%'
+            - JSONB 컬럼에 NOT LIKE 사용 시: "컬럼명"::text NOT LIKE '%값%'
+            - JSONB 컬럼에 = 또는 != 사용 금지, 반드시 LIKE 또는 NOT LIKE 사용
+            - 예시: "음용경험_술"::text LIKE '%소주%'
+            - 예시: "흡연경험"::text NOT LIKE '%담배를 피워본 적이 없다%'
+            7. OR 조건 사용시 반드시 괄호로 묶어야 한다.
+
+            지금 SQL 쿼리를 생성하세요 (순수 SQL만):"""
+
+
+
+
+
 
 # ============================================================
 # API 엔드포인트
@@ -674,25 +643,11 @@ def search():
 
         logging.info(f"🔍 검색 쿼리: {query}")
 
-        # 생활패턴 관련 쿼리인지 확인 후 패널 ID 추출
-        lifestyle_panel_ids = None
-        if is_lifestyle_query(query):
-            logging.info("🎯 생활패턴 임베딩 분석 시작")
-            lifestyle_panel_ids = get_lifestyle_based_panel_ids(query, top_k=100)
-            
-            if not lifestyle_panel_ids:
-                logging.info("❌ 생활패턴 기반 검색 결과 없음")
-                return jsonify({
-                    "panels": [],
-                    "words": []
-                })
-
-        # Claude API로 SQL 쿼리 생성 (생활패턴 패널 ID 포함)
         message = client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=2048,
             messages=[
-                {"role": "user", "content": create_sql_generation_prompt(query, lifestyle_panel_ids)}
+                {"role": "user", "content": create_sql_generation_prompt(query)}
             ]
         )
         
@@ -726,11 +681,14 @@ def search():
         
         logging.info(f"✅ DB 조회 완료: {len(results)}개 패널")
         
+
+
         # 결과 변환
         panels = []
         for idx, row in enumerate(results, start=1):
             panel_dict = dict(row)
             
+            # 신뢰도 계산
             score, hit_rules, hit_messages = calculate_reliability_score(panel_dict)
             
             birth_year = panel_dict.get('출생년도')
@@ -778,7 +736,7 @@ def search():
                 "ownedProducts": panel_dict.get('보유전제품') or [],
                 "lifestylePatterns": lifestyle_dict,
                 "birthYear": birth_year,
-                "_text_description": panel_to_text(panel_dict),
+                
             }
             panels.append(panel)
         
@@ -804,6 +762,11 @@ def search():
             "error": "검색 중 오류가 발생했습니다.",
             "detail": str(e)
         }), 500
+
+
+
+
+
 
 @app.route('/api/common-characteristics', methods=['POST'])
 def common_characteristics():
@@ -914,6 +877,11 @@ def common_characteristics():
             "detail": str(e)
         }), 500
 
+
+
+
+
+
 # 키워드 후보군
 KEYWORD_POOL = [
     '20대 여성', '서울 거주', '직장인', '월소득 300만원', '미혼', '대졸', 'IT업계',
@@ -937,6 +905,11 @@ def related_keywords():
         {'text': KEYWORD_POOL[i], 'similarity': float(sims[i])} for i in indices
     ]
     return jsonify({'keywords': related})
+
+
+
+
+
 
 @app.route('/api/export-csv', methods=['POST'])
 def export_csv():
@@ -1030,6 +1003,10 @@ def export_csv():
             "error": "CSV 내보내기 중 오류가 발생했습니다.",
             "detail": str(e)
         }), 500
+
+
+
+
 
 if __name__ == '__main__':
     logging.basicConfig(
