@@ -52,6 +52,28 @@ def create_sql_generation_prompt(user_query: str) -> str:
             4. 고소득자는 월평균_개인소득 400만원 이상
             5. SQL문 생성시 모든 컬럼명에는 ""를 붙여준다.
             6. 사용자가 무응답(null)값을 검색하고자할 경우 is null로 검색한다.
+            7. JSONB 타입 컬럼 처리 규칙 (매우 중요):
+            - 다음 컬럼들은 JSONB 타입이므로 반드시 ::text로 캐스팅 후 비교해야 한다:
+              음용경험_술, 흡연경험, 흡연경험_담배브랜드, 전자담배_이용경험, 보유전제품
+            - JSONB 컬럼에 LIKE 사용 시: "컬럼명"::text LIKE '%값%'
+            - JSONB 컬럼에 NOT LIKE 사용 시: "컬럼명"::text NOT LIKE '%값%'
+            - JSONB 컬럼에 = 또는 != 사용 금지, 반드시 LIKE 또는 NOT LIKE 사용
+            - 예시: "음용경험_술"::text LIKE '%소주%'
+            - 예시: "흡연경험"::text NOT LIKE '%담배를 피워본 적이 없다%'
+            8. OR 조건 사용시 반드시 괄호로 묶어야 한다.
+            9. 테이블과 전혀 연관이 없는 쿼리가 들어온 경우 [FAIL]으로 리턴한다
+            - 예시: ㅁㄴㅇㅁㄴㅇ, 똥마렵다, 후하하하
+
+            [SQL 출력 형식]
+            ```sql
+            SELECT * 
+            FROM panel_cb_all_label
+            WHERE "출생년도" BETWEEN '1985' AND '1994'
+            AND "체력_관리를_위한_활동" != '체력관리를 위해 하고 있는 활동이 없다'
+            AND "음용경험_술"::text NOT LIKE '%최근 1년 이내 술을 마시지 않음%';
+            ``` 
+            [SQL문을 생성할 수 없는 경우 출력 방식]
+            검색 결과: [FAIL]
 
             지금 SQL 쿼리를 생성하세요 (순수 SQL만):"""
 
@@ -70,6 +92,15 @@ def create_sql_with_llm(query: str):
     # 출력 결과 받아옴
     sql_query = message.content[0].text.strip()
     
+    # 전혀 관련없는 질문을 할 경우
+    if "[FAIL]" in sql_query:
+        current_app.logger.info("❌ 전혀 관련없는 질문입니다.")
+        return jsonify({
+            "panels": [],
+            "words": []
+        })
+
+
     # llm이 생성한 결과에서 SQL 쿼리문만 추출
     if sql_query.startswith("```sql"):
         sql_query = sql_query[6:]

@@ -894,6 +894,7 @@ def related_keywords():
     data = request.get_json()
     user_query = data.get('query', '').strip()
     top_n = int(data.get('top_n', 7))
+    
     if not user_query:
         return jsonify({'keywords': []})
     
