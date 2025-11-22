@@ -63,19 +63,18 @@ def create_sql_generation_prompt(user_query: str) -> str:
             8. OR 조건 사용시 반드시 괄호로 묶어야 한다.
             9. 테이블과 전혀 연관이 없는 쿼리가 들어온 경우 [FAIL]으로 리턴한다
             - 예시: ㅁㄴㅇㅁㄴㅇ, 똥마렵다, 후하하하
+            10. (매우 중요!!) 반드시 아래 [출력 형식] 중 하나만 EXACT하게 출력한다.
+    
+            [출력 형식]
+            - ```sql SELECT * FROM panel_cb_all_label WHERE "출생년도" BETWEEN '1985' AND '1994';``` 
+            - FAIL
 
-            [SQL 출력 형식]
-            ```sql
-            SELECT * 
-            FROM panel_cb_all_label
-            WHERE "출생년도" BETWEEN '1985' AND '1994'
-            AND "체력_관리를_위한_활동" != '체력관리를 위해 하고 있는 활동이 없다'
-            AND "음용경험_술"::text NOT LIKE '%최근 1년 이내 술을 마시지 않음%';
-            ``` 
-            [SQL문을 생성할 수 없는 경우 출력 방식]
-            검색 결과: [FAIL]
+            [출력 규칙]
+            1. 사용자의 자연어 질의를 바탕으로 sql 쿼리문을 생성할 수 있을 경우 (```sql SQL쿼리문 ```) 형태로 출력한다.
+            2. 사용자의 자연어 질의를 바탕으로 sql 쿼리를 생성할 수 없을 경우 (FAIL)로 출력한다.
+            3. 위 제시한 출력 규칙 외의 다른 문장이나 설명은 절대 작성하지 않는다.
 
-            지금 SQL 쿼리를 생성하세요 (순수 SQL만):"""
+            """
 
 # LLM으로 SQL 쿼리 생성
 def create_sql_with_llm(query: str):
@@ -91,13 +90,21 @@ def create_sql_with_llm(query: str):
     
     # 출력 결과 받아옴
     sql_query = message.content[0].text.strip()
-    
+    current_app.logger.info(f"🤖 LLM 응답결과 : {sql_query}")
+
+
+    # llm이 출력 규칙을 위반하는 경우
+    if ("FAIL" not in sql_query) and ("```sql" not in sql_query):
+        current_app.logger.info("❌ 출력 형식을 위반하였습니다.")
+        return jsonify({
+            "panels": []
+        })
+
     # 전혀 관련없는 질문을 할 경우
-    if "[FAIL]" in sql_query:
+    if "FAIL" in sql_query:
         current_app.logger.info("❌ 전혀 관련없는 질문입니다.")
         return jsonify({
-            "panels": [],
-            "words": []
+            "panels": []
         })
 
 
@@ -120,8 +127,7 @@ def create_sql_with_llm(query: str):
     if not results:
         current_app.logger.info("❌ 검색 결과 없음")
         return jsonify({
-            "panels": [],
-            "words": []
+            "panels": []
         })
     
     current_app.logger.info(f"✅ DB 조회 완료: {len(results)}개 패널")
@@ -186,15 +192,9 @@ def create_sql_with_llm(query: str):
     
     panels.sort(key=lambda x: x['reliability'], reverse=True)
         
-    words = []
-    keywords = query.split()
-    for keyword in keywords:
-        if len(keyword) > 1:
-            words.append({"text": keyword, "value": 10})
     
     current_app.logger.info(f"🎉 검색 완료: {len(panels)}개 패널")
     
     return jsonify({
-        "panels": panels,
-        "words": words
+        "panels": panels
     })
