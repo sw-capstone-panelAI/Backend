@@ -6,7 +6,7 @@ from flask import Blueprint, request, jsonify, current_app
 import traceback
 from ..services.text2sql import create_sql_with_llm
 from ..services.exportCSV import makeCsv
-from ..services.keyword import makeKeyword
+from ..services.keyword import makeKeyword, makeNewQuery
 from ..services.common import makeCommon
     
 # 파일 구조화를 위해 블루프린터 객체 생성
@@ -70,21 +70,48 @@ def common_characteristics():
 
 
 # 추천 검색어
-# @bp_api.route('/related_keywords', methods=['POST'])
-# def related_keywords():
-#     # 추출된 패널과 입력한 자연어 쿼리 가져옴
-#     data = request.get_json()
-#     user_query = data.get('query', '').strip()
-#     top_n = int(data.get('top_n', 7))
+@bp_api.route('/related-keywords', methods=['POST'])
+def related_keywords():
+    # 추출된 패널과 입력한 자연어 쿼리 가져옴
+    data = request.get_json()
+    user_query = data.get('query', '').strip()
     
-#     # 입력한 쿼리가 없을 경우 예외처리
-#     if not user_query:
-#         return jsonify({'keywords': []})
+    # 입력한 쿼리가 없을 경우 예외처리
+    if not user_query:
+        return jsonify([
+            { "text": "키워드1" },
+            { "text": "키워드2" },
+            { "text": "키워드3" },
+            { "text": "키워드4" },
+            { "text": "키워드5" },
+            { "text": "키워드6" }
+        ])
 
-#     related = makeKeyword(data, user_query, top_n)
+    # 추천 키워드를 생성
+    keywords = makeKeyword(user_query)
+    current_app.logger.info(f"생성된 키워드: {keywords}")
 
-#     # 프론트로 키워드 반환
-#     return jsonify({'keywords': related})
+    # 프론트로 키워드 반환
+    return jsonify(keywords)
+
+
+# 추천어 기반 자연어 쿼리 생성
+@bp_api.route('/keywords-newQuery', methods=['POST'])
+def keywords_base_query():
+    # 추출된 패널과 입력한 자연어 쿼리 가져옴
+    data = request.get_json()
+    user_query = data.get('query', '').strip()
+    keywords = data.get('keywords', [])
+
+    # 입력한 쿼리가 없을 경우 예외처리
+    if not user_query:
+        return jsonify({'query': "서울 거주 20대"})
+
+    # 추천어 기반 자연어 쿼리 생성
+    newQuery = makeNewQuery(user_query, keywords)
+
+    # 프론트로 키워드 반환
+    return jsonify({'query': newQuery})
 
 
 # csv 생성
