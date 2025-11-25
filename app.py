@@ -1,0 +1,7 @@
+# 서버 실행 진입점
+from panel_app import create_app
+
+app = create_app()
+
+if __name__ == "__main__":
+    app.run(host='0.0.0.0', port=5000, debug=True)  # 개발모드, 기본포트 5000
