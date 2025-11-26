@@ -9,9 +9,19 @@ import json
 from ..services.reliability import LIFESTYLE_COLUMNS, calculate_reliability_score 
 
 # llm에게 입력할 프롬프트 생성하는 함수
-def create_sql_generation_prompt(user_query: str) -> str:
-    """SQL 쿼리 생성 프롬프트 (생활패턴 기반 필터링 포함)"""
+def create_sql_generation_prompt(user_query: str, search_model: str = "fast") -> str:
     
+    # 방어 코드
+    if search_model not in ("fast", "deep"):
+        search_model = "fast"
+
+    # search_model fast, deep 둘다 아닌경우 디폴트로 방어
+    if search_model == "deep":
+        semple_query = "# 자연어, 샘플쿼리 임베딩 top-k 추출"
+    else:
+        sample_query = "# 디폴트 샘플쿼리"
+
+    """SQL 쿼리 생성 프롬프트 (생활패턴 기반 필터링 포함)"""
     # 테이블 스키마 설명서
     with open("./tabel_schema_info.json", "r", encoding="utf-8") as f:
         jsonFile = json.load(f)
@@ -77,14 +87,14 @@ def create_sql_generation_prompt(user_query: str) -> str:
             """
 
 # LLM으로 SQL 쿼리 생성
-def create_sql_with_llm(query: str):
+def create_sql_with_llm(query: str, model: str):
 
     # 클로드 불러와서 프롬프트 입력
     message = antropicLLM.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=2048,
         messages=[
-            {"role": "user", "content": create_sql_generation_prompt(query)}
+            {"role": "user", "content": create_sql_generation_prompt(query, model)}
         ]
     )
     
