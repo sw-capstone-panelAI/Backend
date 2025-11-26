@@ -19,16 +19,17 @@ def search():
         # 프론트에서 자연어 쿼리 받아오기
         data = request.get_json()
         query = data.get('query', '').strip()
+        model = data.get('model', '').strip() # fast 모델, deep 모델
 
         # 입력 쿼리가 없을 경우
         if not query:
             return jsonify({"error": "쿼리를 입력해주세요."}), 400
 
         # 로깅
-        current_app.logger.info(f"🔍 검색 쿼리: {query}")
+        current_app.logger.info(f"🔍 검색 쿼리: {query}, 🔍 검색 모델: {model}")
         
         # 자연어 쿼리 입력시 llm이 sql 쿼리문 생성
-        response = create_sql_with_llm(query)
+        response = create_sql_with_llm(query, model)
 
         # 프론트로 리턴할 값
         return response
