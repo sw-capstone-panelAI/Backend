@@ -32,12 +32,16 @@ def create_sql_generation_prompt(user_query: str, search_model: str = "fast") ->
         sample_query_block = """ 
         [
         {
-            "input": "경기도에 사는 30대 기혼 여성 중 자녀가 1명 있는 사람",
-            "query": "SELECT * FROM panel_cb_all_label WHERE \"지역\" = '경기' AND \"출생년도\" BETWEEN '1985' AND '1994' AND \"결혼여부\" = '기혼' AND \"성별\" = '여성' AND \"자녀수\" = 1;"
+            "input": "서울 거주하는 30대 남성",
+            "query": "SELECT * FROM panel_cb_all_label WHERE \"지 역\" = '서울' AND \"출생년도\" BETWEEN '1985' AND '1994' AND \"성별\" = '남성'"
         },
         {
-            "input": "서울에 거주하는 20대 남성 중 아이폰을 사용하는 사람",
-            "query": "SELECT * FROM panel_cb_all_label WHERE \"지역\" = '서울' AND \"출생년도\" BETWEEN '1995' AND '2004' AND \"성별\" = '남성' AND \"휴대폰_브랜드\" = '애플 (아이폰)';"
+            "input": "운동 좋아하고 술 좋아하는 30대",
+            "query": "SELECT * FROM panel_cb_all_label WHERE \"출 생년도\" BETWEEN '1985' AND '1994' AND \"체력_관리를_위한_활동\" IS NOT NULL AND \"체력_관리를_위한_활동\" != '체력관리를 위해 하고 있는 활동이 없다' AND \"음용경험_술\"::text NOT LIKE '%최근 1년 이내 술을 마시 지 않음%'"
+        },
+        {
+            "input": "호남권에 거주하고 있는 AI 챗봇 사용해본 사람",
+            "query": "SELECT * FROM panel_cb_all_label WHERE \"지 역\" IN ('광주', '전남', '전북') AND \"사용해_본_AI_챗봇_서비스\" != '사용해 본 적 없음'"
         }
         ]
         """
