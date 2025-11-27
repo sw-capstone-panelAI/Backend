@@ -26,7 +26,7 @@ def search():
             return jsonify({"error": "쿼리를 입력해주세요."}), 400
 
         # 로깅
-        current_app.logger.info(f"🔍 검색 쿼리: {query}, 🔍 검색 모델: {model}")
+        current_app.logger.info(f"🔍 검색 쿼리: {query} \n 🔍 검색 모델: {model}")
         
         # 자연어 쿼리 입력시 llm이 sql 쿼리문 생성
         response = create_sql_with_llm(query, model)

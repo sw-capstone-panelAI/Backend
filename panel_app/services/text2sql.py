@@ -7,6 +7,7 @@ from ..models import db # db연결된 객체
 from sqlalchemy import text
 import json
 from ..services.reliability import LIFESTYLE_COLUMNS, calculate_reliability_score 
+from .embedding import sampleQueryEmbedding
 
 # llm에게 입력할 프롬프트 생성하는 함수
 def create_sql_generation_prompt(user_query: str, search_model: str = "fast") -> str:
@@ -15,11 +16,35 @@ def create_sql_generation_prompt(user_query: str, search_model: str = "fast") ->
     if search_model not in ("fast", "deep"):
         search_model = "fast"
 
+    
+    
     # search_model fast, deep 둘다 아닌경우 디폴트로 방어
+   
+    # 공통 변수 이름 통일
+    sample_query_block = ""
+
     if search_model == "deep":
-        semple_query = "# 자연어, 샘플쿼리 임베딩 top-k 추출"
+        # 벡터DB에서 가져온 샘플들 (list[dict])을 문자열로 변환해서 사용
+        samples = sampleQueryEmbedding(user_query)
+        # 예: [{"input": "...", "query": "..."}, ...] -> JSON 문자열로
+        sample_query_block = json.dumps(samples, ensure_ascii=False, indent=2)
     else:
-        sample_query = "# 디폴트 샘플쿼리"
+        sample_query_block = """ 
+        [
+        {
+            "input": "경기도에 사는 30대 기혼 여성 중 자녀가 1명 있는 사람",
+            "query": "SELECT * FROM panel_cb_all_label WHERE \"지역\" = '경기' AND \"출생년도\" BETWEEN '1985' AND '1994' AND \"결혼여부\" = '기혼' AND \"성별\" = '여성' AND \"자녀수\" = 1;"
+        },
+        {
+            "input": "서울에 거주하는 20대 남성 중 아이폰을 사용하는 사람",
+            "query": "SELECT * FROM panel_cb_all_label WHERE \"지역\" = '서울' AND \"출생년도\" BETWEEN '1995' AND '2004' AND \"성별\" = '남성' AND \"휴대폰_브랜드\" = '애플 (아이폰)';"
+        }
+        ]
+        """
+
+    print("=====================유사도 검색을 통해 불러온 샘플쿼리 10개를 출력합니다.================= \n"\
+           + sample_query_block + \
+            "================================================================================================\n")
 
     """SQL 쿼리 생성 프롬프트 (생활패턴 기반 필터링 포함)"""
     # 테이블 스키마 설명서
@@ -74,7 +99,11 @@ def create_sql_generation_prompt(user_query: str, search_model: str = "fast") ->
             9. 테이블과 전혀 연관이 없는 쿼리가 들어온 경우 [FAIL]으로 리턴한다
             - 예시: ㅁㄴㅇㅁㄴㅇ, 똥마렵다, 후하하하
             10. (매우 중요!!) 반드시 아래 [출력 형식] 중 하나만 EXACT하게 출력한다.
-    
+            11. (매우 중요!!) where 조건문을 만들때 테이블 설명서에 없는 컬럼은 "절대" 넣으면 안돼
+            
+            [자연어 쿼리 SQL 쿼리 변환 예시]
+            {sample_query_block}
+
             [출력 형식]
             - ```sql SELECT * FROM panel_cb_all_label WHERE "출생년도" BETWEEN '1985' AND '1994';``` 
             - FAIL
@@ -127,7 +156,7 @@ def create_sql_with_llm(query: str, model: str):
         sql_query = sql_query[:-3]
     sql_query = sql_query.strip()
     
-    current_app.logger.info(f"📝 생성된 SQL: {sql_query}")
+    current_app.logger.info(f"📝 생성된 SQL: {sql_query}\n")
     
     # SQL 쿼리 실행
     rows = db.session.execute(text(sql_query)).mappings().all()
