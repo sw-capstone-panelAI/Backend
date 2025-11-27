@@ -47,7 +47,7 @@ RULE_MESSAGES = {
     "car_brand_but_no_model": "차량 브랜드 있음 + 차종 없음",
     "car_model_but_no_brand": "차량 브랜드 없음 + 차종 있음",
     "car_have_N_but_brand_or_model": "차량 보유 '없다'인데 브랜드/모델 기재",
-    "car_brand_model_mismatch_heuristic": "차량 브랜드/모델 불일치(휴리스틱)",
+    "car_brand_model_mismatch_heuristic": "차량 브랜드/모델 불일치",
 }
 
 # 생활패턴 칼럼 리스트
@@ -276,7 +276,7 @@ def preprocess_panel(row):
             birth_int = birth
         else:
             birth_int = int(str(birth).strip())
-        r["age"] = 2025 - birth_int - 1  # 만 나이
+        r["age"] = 2025 - birth_int  # 만 나이
     except Exception:
         r["age"] = None
 

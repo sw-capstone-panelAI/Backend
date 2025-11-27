@@ -7,11 +7,46 @@ from ..models import db # db연결된 객체
 from sqlalchemy import text
 import json
 from ..services.reliability import LIFESTYLE_COLUMNS, calculate_reliability_score 
+from .embedding import sampleQueryEmbedding
 
 # llm에게 입력할 프롬프트 생성하는 함수
-def create_sql_generation_prompt(user_query: str) -> str:
-    """SQL 쿼리 생성 프롬프트 (생활패턴 기반 필터링 포함)"""
+def create_sql_generation_prompt(user_query: str, search_model: str = "fast") -> str:
     
+    # 방어 코드
+    if search_model not in ("fast", "deep"):
+        search_model = "fast"
+
+    
+    
+    # search_model fast, deep 둘다 아닌경우 디폴트로 방어
+   
+    # 공통 변수 이름 통일
+    sample_query_block = ""
+
+    if search_model == "deep":
+        # 벡터DB에서 가져온 샘플들 (list[dict])을 문자열로 변환해서 사용
+        samples = sampleQueryEmbedding(user_query)
+        # 예: [{"input": "...", "query": "..."}, ...] -> JSON 문자열로
+        sample_query_block = json.dumps(samples, ensure_ascii=False, indent=2)
+    else:
+        sample_query_block = """ 
+        [
+        {
+            "input": "경기도에 사는 30대 기혼 여성 중 자녀가 1명 있는 사람",
+            "query": "SELECT * FROM panel_cb_all_label WHERE \"지역\" = '경기' AND \"출생년도\" BETWEEN '1985' AND '1994' AND \"결혼여부\" = '기혼' AND \"성별\" = '여성' AND \"자녀수\" = 1;"
+        },
+        {
+            "input": "서울에 거주하는 20대 남성 중 아이폰을 사용하는 사람",
+            "query": "SELECT * FROM panel_cb_all_label WHERE \"지역\" = '서울' AND \"출생년도\" BETWEEN '1995' AND '2004' AND \"성별\" = '남성' AND \"휴대폰_브랜드\" = '애플 (아이폰)';"
+        }
+        ]
+        """
+
+    print("=====================유사도 검색을 통해 불러온 샘플쿼리 10개를 출력합니다.================= \n"\
+           + sample_query_block + \
+            "================================================================================================\n")
+
+    """SQL 쿼리 생성 프롬프트 (생활패턴 기반 필터링 포함)"""
     # 테이블 스키마 설명서
     with open("./tabel_schema_info.json", "r", encoding="utf-8") as f:
         jsonFile = json.load(f)
@@ -48,11 +83,12 @@ def create_sql_generation_prompt(user_query: str) -> str:
             - 40대 (만 40~49세): 출생년도 1975 ~ 1984
             - 50대 (만 50~59세): 출생년도 1965 ~ 1974
             - 60대 (만 60~69세): 출생년도 1955 ~ 1964
-            3. 인원수 명시시 LIMIT 추가
-            4. 고소득자는 월평균_개인소득 400만원 이상
-            5. SQL문 생성시 모든 컬럼명에는 ""를 붙여준다.
-            6. 사용자가 무응답(null)값을 검색하고자할 경우 is null로 검색한다.
-            7. JSONB 타입 컬럼 처리 규칙 (매우 중요):
+            3. 모든 나이에 대한 검색기준은 만 나이로 한다.
+            4. 인원수 명시시 LIMIT 추가
+            5. 고소득자는 월평균_개인소득 400만원 이상
+            6. SQL문 생성시 모든 컬럼명에는 ""를 붙여준다.
+            7. 사용자가 무응답(null)값을 검색하고자할 경우 is null로 검색한다.
+            8. JSONB 타입 컬럼 처리 규칙 (매우 중요):
             - 다음 컬럼들은 JSONB 타입이므로 반드시 ::text로 캐스팅 후 비교해야 한다:
               음용경험_술, 흡연경험, 흡연경험_담배브랜드, 전자담배_이용경험, 보유전제품
             - JSONB 컬럼에 LIKE 사용 시: "컬럼명"::text LIKE '%값%'
@@ -60,11 +96,15 @@ def create_sql_generation_prompt(user_query: str) -> str:
             - JSONB 컬럼에 = 또는 != 사용 금지, 반드시 LIKE 또는 NOT LIKE 사용
             - 예시: "음용경험_술"::text LIKE '%소주%'
             - 예시: "흡연경험"::text NOT LIKE '%담배를 피워본 적이 없다%'
-            8. OR 조건 사용시 반드시 괄호로 묶어야 한다.
-            9. 테이블과 전혀 연관이 없는 쿼리가 들어온 경우 [FAIL]으로 리턴한다
+            9. OR 조건 사용시 반드시 괄호로 묶어야 한다.
+            10. 테이블과 전혀 연관이 없는 쿼리가 들어온 경우 [FAIL]으로 리턴한다
             - 예시: ㅁㄴㅇㅁㄴㅇ, 똥마렵다, 후하하하
-            10. (매우 중요!!) 반드시 아래 [출력 형식] 중 하나만 EXACT하게 출력한다.
-    
+            11. (매우 중요!!) 반드시 아래 [출력 형식] 중 하나만 EXACT하게 출력한다.
+            12. (매우 중요!!) where 조건문을 만들때 테이블 설명서에 없는 컬럼은 "절대" 넣으면 안돼
+
+            [자연어 쿼리 SQL 쿼리 변환 예시]
+            {sample_query_block}
+
             [출력 형식]
             - ```sql SELECT * FROM panel_cb_all_label WHERE "출생년도" BETWEEN '1985' AND '1994';``` 
             - FAIL
@@ -77,19 +117,55 @@ def create_sql_generation_prompt(user_query: str) -> str:
             """
 
 # LLM으로 SQL 쿼리 생성
-def create_sql_with_llm(query: str):
+def create_sql_with_llm(query: str, model: str = "fast"):
 
-    # 클로드 불러와서 프롬프트 입력
-    message = antropicLLM.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=2048,
-        messages=[
-            {"role": "user", "content": create_sql_generation_prompt(query)}
-        ]
-    )
+    if model == "deep":
+        # Extended Thinking 사용 (API가 지원하는 경우)
+        try:
+            message = antropicLLM.messages.create(
+                model="claude-opus-4-5-20251101",
+                max_tokens=4096,  # thinking 토큰 + 응답 토큰
+                thinking={
+                    "type": "enabled",
+                    "budget_tokens": 2000  # 생각에 2000 토큰 할당
+                },
+                messages=[
+                    {"role": "user", "content": create_sql_generation_prompt(query, model)}
+                ]
+            )
+        except Exception as e:
+            # Extended Thinking이 지원되지 않는 경우 프롬프트로 대체
+            print(f"Extended thinking not available, using prompt engineering: {e}")
+            message = antropicLLM.messages.create(
+                model="claude-sonnet-4-5-20250929",
+                max_tokens=2048,
+                messages=[
+                    {"role": "user", "content": create_sql_generation_prompt(query, model)}
+                ]
+            )
+    else:
+        # Fast 모드는 기존 방식 유지
+        message = antropicLLM.messages.create(
+            model="claude-sonnet-4-5-20250929",
+            max_tokens=2048,
+            messages=[
+                {"role": "user", "content": create_sql_generation_prompt(query, model)}
+            ]
+        )
     
+        
     # 출력 결과 받아옴
-    sql_query = message.content[0].text.strip()
+    # Extended Thinking 응답에서 텍스트 블록만 추출
+    sql_query = None
+    for block in message.content:
+        if block.type == "text":
+            sql_query = block.text.strip()
+            break
+    
+    if sql_query is None:
+        current_app.logger.error("❌ LLM 응답에서 텍스트를 찾을 수 없음")
+        return jsonify({"panels": []})
+
     current_app.logger.info(f"🤖 LLM 응답결과 : {sql_query}")
 
 
@@ -117,7 +193,7 @@ def create_sql_with_llm(query: str):
         sql_query = sql_query[:-3]
     sql_query = sql_query.strip()
     
-    current_app.logger.info(f"📝 생성된 SQL: {sql_query}")
+    current_app.logger.info(f"📝 생성된 SQL: {sql_query}\n")
     
     # SQL 쿼리 실행
     rows = db.session.execute(text(sql_query)).mappings().all()
@@ -144,7 +220,7 @@ def create_sql_with_llm(query: str):
         age = None
         if birth_year:
             try:
-                age = 2025 - int(birth_year) -1
+                age = 2025 - int(birth_year)
             except:
                 age = None
         
