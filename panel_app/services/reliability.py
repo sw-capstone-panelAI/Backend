@@ -276,7 +276,7 @@ def preprocess_panel(row):
             birth_int = birth
         else:
             birth_int = int(str(birth).strip())
-        r["age"] = 2025 - birth_int - 1  # 만 나이
+        r["age"] = 2025 - birth_int  # 만 나이
     except Exception:
         r["age"] = None
 
