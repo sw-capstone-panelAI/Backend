@@ -1,8 +1,12 @@
 # PanelFinder BackEnd
-[영상]
+
+
+https://github.com/user-attachments/assets/4bf3a125-a012-4d6c-8c82-bc0c87eeaba3
+
 
 ## Preview
-[판넬]
+<img width="1587" height="2245" alt="판넬" src="https://github.com/user-attachments/assets/57e43de9-e7a8-4de3-8f58-c683a8d593db" />
+
 
 ### Members
 <table width="50%" align="center">
