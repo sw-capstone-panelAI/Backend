@@ -52,8 +52,45 @@ vevn\Scripts\activate
   venv\Scripts\deactivate
 
 ## Project Structure
-[파일 구조]
 
+음 어디까지 넣어야할지 모르겠다...
+```
+📦panel_app
+ ┣ 📂models
+ ┃ ┣ 📂__pycache__
+ ┃ ┃ ┗ 📜__init__.cpython-313.pyc
+ ┃ ┗ 📜__init__.py
+ ┣ 📂routes
+ ┃ ┣ 📂__pycache__
+ ┃ ┃ ┣ 📜api.cpython-313.pyc
+ ┃ ┃ ┣ 📜search.cpython-313.pyc
+ ┃ ┃ ┗ 📜__init__.cpython-313.pyc
+ ┃ ┣ 📜api.py
+ ┃ ┗ 📜__init__.py
+ ┣ 📂services
+ ┃ ┣ 📂__pycache__
+ ┃ ┃ ┣ 📜common.cpython-313.pyc
+ ┃ ┃ ┣ 📜embedding.cpython-313.pyc
+ ┃ ┃ ┣ 📜embedding_search.cpython-313.pyc
+ ┃ ┃ ┣ 📜exportCSV.cpython-313.pyc
+ ┃ ┃ ┣ 📜keyword.cpython-313.pyc
+ ┃ ┃ ┣ 📜panel_search.cpython-313.pyc
+ ┃ ┃ ┣ 📜reliability.cpython-313.pyc
+ ┃ ┃ ┣ 📜simpleSQL_search.cpython-313.pyc
+ ┃ ┃ ┣ 📜text2sql.cpython-313.pyc
+ ┃ ┃ ┗ 📜__init__.cpython-313.pyc
+ ┃ ┣ 📜common.py
+ ┃ ┣ 📜embedding.py
+ ┃ ┣ 📜exportCSV.py
+ ┃ ┣ 📜keyword.py
+ ┃ ┣ 📜reliability.py
+ ┃ ┣ 📜tabel_schema_info.json
+ ┃ ┣ 📜text2sql.py
+ ┃ ┗ 📜__init__.py
+ ┣ 📂__pycache__
+ ┃ ┗ 📜__init__.cpython-313.pyc
+ ┗ 📜__init__.py
+```
 ## Key Features
 [주요기능]
 
