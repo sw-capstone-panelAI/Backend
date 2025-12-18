@@ -1,107 +1,100 @@
-# DiffLens Frontend
+# PanelFinder BackEnd
 
-https://github.com/user-attachments/assets/8916618c-9827-4a0d-8cb9-5339a6f3f6e3
-
-DiffLens는 패널 데이터 분석 및 비교를 위한 웹 애플리케이션입니다.
+https://github.com/user-attachments/assets/4bf3a125-a012-4d6c-8c82-bc0c87eeaba3
 
 ## Preview
 
-<img width="4760" height="6736" alt="image" src="https://github.com/user-attachments/assets/7cd8899e-e107-4f6d-83f8-244018cc2da2" />
+<img width="1587" height="2245" alt="판넬" src="https://github.com/user-attachments/assets/57e43de9-e7a8-4de3-8f58-c683a8d593db" />
 
 ### Members
 
 <table width="50%" align="center">
     <tr>
-        <td align="center"><b>LEAD/BE</b></td>
-        <td align="center"><b>FE</b></td>
-        <td align="center"><b>FE/DE</b></td>
-        <td align="center"><b>BE</b></td>
+        <td align="center"><b>LEAD/FE</b></td>
+        <td align="center"><b>FE/BE</b></td>
         <td align="center"><b>AI/DATA</b></td>
+        <td align="center"><b>AI/DB</b></td>
     </tr>
     <tr>
-        <td align="center"><img src="https://github.com/user-attachments/assets/561672fc-71f6-49d3-b826-da55d6ace0c4" /></td>
-        <td align="center"><img src="https://github.com/user-attachments/assets/b95eea07-c69a-4bbf-9a8f-eccda41c410e" /></td>
-        <td align="center"><img src="https://github.com/user-attachments/assets/15ac4334-9325-48f1-9cf6-0485f9cf130f"></td>
-        <td align="center"><img src="https://github.com/user-attachments/assets/2572fa94-b981-46c6-9731-10c977267e16" /></td>
-        <td align="center"><img src="https://github.com/user-attachments/assets/197a24c6-853c-4d63-b026-44032b27a5f1" /></td>
+        <td align="center"><img src="https://avatars.githubusercontent.com/u/173050233?v=4" /></td>
+        <td align="center"><img src="https://avatars.githubusercontent.com/u/120187934?v=4" /></td>
+        <td align="center"><img src="https://avatars.githubusercontent.com/u/132585785?v=4"></td>
+        <td align="center"><img src="https://avatars.githubusercontent.com/u/203871424?v=4" /></td>
     </tr>
     <tr>
-        <td align="center"><b><a href="https://github.com/hardwoong">박세웅</a></b></td>
-        <td align="center"><b><a href="https://github.com/nyun-nye">윤예진</a></b></td>
-        <td align="center"><b><a href="https://github.com/hyesngy">윤혜성</a></b></td>
-        <td align="center"><b><a href="https://github.com/ggamnunq">김준용</a></b></td> 
-        <td align="center"><b><a href="https://github.com/hoya04">신정호</a></b></td> 
+        <td align="center"><b><a href="https://github.com/Aegis0424">안성민</a></b></td>
+        <td align="center"><b><a href="https://github.com/seungjin777">강승진</a></b></td>
+        <td align="center"><b><a href="https://github.com/iral304">송정은</a></b></td>
+        <td align="center"><b><a href="https://github.com/hyeon-414">우현</a></b></td> 
     </tr>
 </table>
 
 ## Tech Stack
 
-- **React 19** - UI 라이브러리
-- **TypeScript** - 타입 안정성
-- **Vite** - 빌드 도구
-- **React Router** - 라우팅
-- **TanStack Query** - 서버 상태 관리
-- **AmCharts 5** - 차트 라이브러리
-- **Tailwind CSS** - 스타일링
-- **Axios** - HTTP 클라이언트
+[기술 스택]
 
 ## Getting Started
 
 ### Installation
 
-```bash
-git clone https://github.com/hansung-sw-capstone-2025-2/2025_8_A_FE.git
-cd 2025_8_A_FE
-```
+flask 세팅
 
-```bash
-npm install
-# 또는
-pnpm install
-```
+가상환경 세팅 python -m venv venv
 
-### Build
+가상환경 실행
+vevn\Scripts\activate
 
-```bash
-npm run build
-# 또는
-pnpm build
-```
+필요한 라이브러리 설치 pip install -r requirements.txt
 
-### Preview Build
-
-```bash
-npm run preview
-# 또는
-pnpm preview
-```
+- 추가 정보
+  가상환경 종료
+  venv\Scripts\deactivate
 
 ## Project Structure
 
+음 어디까지 넣어야할지 모르겠다...
+
 ```
-src/
-├── api/              # API 클라이언트
-├── assets/           # 정적 자산 (아이콘, 이미지, 로고)
-├── components/       # 재사용 가능한 컴포넌트
-├── constants/        # 상수 정의
-├── contexts/         # React Context
-├── data/             # 정적 데이터
-├── hooks/            # 커스텀 훅
-├── layouts/          # 레이아웃 컴포넌트
-├── pages/            # 페이지 컴포넌트
-├── routes/           # 라우팅 설정
-├── styles/           # 전역 스타일
-├── types/            # TypeScript 타입 정의
-└── utils/            # 유틸리티 함수
+📦panel_app
+ ┣ 📂models
+ ┃ ┣ 📂__pycache__
+ ┃ ┃ ┗ 📜__init__.cpython-313.pyc
+ ┃ ┗ 📜__init__.py
+ ┣ 📂routes
+ ┃ ┣ 📂__pycache__
+ ┃ ┃ ┣ 📜api.cpython-313.pyc
+ ┃ ┃ ┣ 📜search.cpython-313.pyc
+ ┃ ┃ ┗ 📜__init__.cpython-313.pyc
+ ┃ ┣ 📜api.py
+ ┃ ┗ 📜__init__.py
+ ┣ 📂services
+ ┃ ┣ 📂__pycache__
+ ┃ ┃ ┣ 📜common.cpython-313.pyc
+ ┃ ┃ ┣ 📜embedding.cpython-313.pyc
+ ┃ ┃ ┣ 📜embedding_search.cpython-313.pyc
+ ┃ ┃ ┣ 📜exportCSV.cpython-313.pyc
+ ┃ ┃ ┣ 📜keyword.cpython-313.pyc
+ ┃ ┃ ┣ 📜panel_search.cpython-313.pyc
+ ┃ ┃ ┣ 📜reliability.cpython-313.pyc
+ ┃ ┃ ┣ 📜simpleSQL_search.cpython-313.pyc
+ ┃ ┃ ┣ 📜text2sql.cpython-313.pyc
+ ┃ ┃ ┗ 📜__init__.cpython-313.pyc
+ ┃ ┣ 📜common.py
+ ┃ ┣ 📜embedding.py
+ ┃ ┣ 📜exportCSV.py
+ ┃ ┣ 📜keyword.py
+ ┃ ┣ 📜reliability.py
+ ┃ ┣ 📜tabel_schema_info.json
+ ┃ ┣ 📜text2sql.py
+ ┃ ┗ 📜__init__.py
+ ┣ 📂__pycache__
+ ┃ ┗ 📜__init__.cpython-313.pyc
+ ┗ 📜__init__.py
 ```
 
 ## Key Features
 
-- **패널 관리**: 패널 정보 조회 및 관리
-- **라이브러리**: 분석 결과 저장 및 관리
-- **데이터 시각화**: 다양한 차트를 통한 데이터 분석
-- **비교 분석**: 여러 라이브러리 간 비교
-- **응답 데이터 관리**: 전체 응답 데이터 조회 및 관리
+[주요기능]
 
 ## License
 
