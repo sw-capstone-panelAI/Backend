@@ -4,12 +4,30 @@
 from config import antropicLLM # 클로드 llm 가져오기
 import json
 
+def get_schema_info_from_db():
+    """DB에서 테이블 스키마 JSON 정보를 조회합니다."""
+    try:
+        # category가 'panel_schema'인 데이터를 조회
+        sql = text("SELECT content FROM schema_info WHERE category = 'panel_schema' LIMIT 1")
+        result = db.session.execute(sql).fetchone()
+        
+        if result:
+            return result[0]  # JSON 객체(dict) 반환
+        return {}
+    except Exception as e:
+        print(f"DB 스키마 조회 오류: {e}")
+        return {}
+
 # 테이블 스키마 설명서
-with open("./tabel_schema_info.json", "r", encoding="utf-8") as f:
-    jsonFile = json.load(f)
+# with open("./tabel_schema_info.json", "r", encoding="utf-8") as f:
+#     jsonFile = json.load(f)
 
 # 추천어 생성 함수
 def makeKeyword(user_query:str):
+
+    # DB에서 최신 스키마 정보 가져오기
+    jsonFile = get_schema_info_from_db()
+
     # 입력할 프롬프트
     content = f"""
         [역할]

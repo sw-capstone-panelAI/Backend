@@ -9,6 +9,20 @@ import json
 from ..services.reliability import LIFESTYLE_COLUMNS, calculate_reliability_score 
 from .embedding import sampleQueryEmbedding
 
+# 테이블 스키마 json 읽어오기
+def get_schema_info_from_db():
+    try:
+        # category가 'panel_schema'인 데이터를 조회
+        sql = text("SELECT content FROM schema_info WHERE category = 'panel_schema' LIMIT 1")
+        result = db.session.execute(sql).fetchone()
+        
+        if result:
+            return result[0]  # JSON 객체(dict) 반환
+        return {}
+    except Exception as e:
+        print(f"DB 스키마 조회 오류: {e}")
+        return {}
+
 # llm에게 입력할 프롬프트 생성하는 함수
 def create_sql_generation_prompt(user_query: str, search_model: str = "fast") -> str:
     
@@ -52,8 +66,10 @@ def create_sql_generation_prompt(user_query: str, search_model: str = "fast") ->
 
     """SQL 쿼리 생성 프롬프트 (생활패턴 기반 필터링 포함)"""
     # 테이블 스키마 설명서
-    with open("./tabel_schema_info.json", "r", encoding="utf-8") as f:
-        jsonFile = json.load(f)
+    # with open("./tabel_schema_info.json", "r", encoding="utf-8") as f:
+    #     jsonFile = json.load(f)
+
+    jsonFile = get_schema_info_from_db()
 
     return f"""너는 자연어 쿼리가 들어왔을 때 그것을 SQL쿼리문으로 바꿔주는 데이터베이스 전문가이다.
             제공되는 테이블 스키마 가이드 json파일을 참고하여 사용자가 입력한 자연어 쿼리에 적합한 SQL 쿼리문을 만들어라.
