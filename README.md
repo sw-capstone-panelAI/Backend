@@ -6,6 +6,11 @@ https://github.com/user-attachments/assets/4bf3a125-a012-4d6c-8c82-bc0c87eeaba3
 
 <img width="1587" height="2245" alt="판넬" src="https://github.com/user-attachments/assets/57e43de9-e7a8-4de3-8f58-c683a8d593db" />
 
+## Prize
+|  |  |
+|---|---|
+| ![상판넬](https://github.com/user-attachments/assets/cc48e96f-6395-42fd-8361-6392991a611d)| ![상장](https://github.com/user-attachments/assets/6058b047-db4d-4a9d-ac20-9306bcca1d2c)|
+
 ### Members
 
 <table width="50%" align="center">
